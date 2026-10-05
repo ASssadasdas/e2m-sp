@@ -22,6 +22,7 @@ local Settings = {
     PlayersHealth = false,
     PlayersLookVector = false,
     BotsESP = false,
+    TeammateName = "",
 }
 
 local PLAYER_COLOR = Color3.fromRGB(255, 255, 255)
@@ -29,16 +30,23 @@ local DEAD_COLOR   = Color3.fromRGB(255, 0, 0)
 local BOT_COLOR    = Color3.fromRGB(255, 140, 0)
 local LOOK_COLOR   = Color3.fromRGB(0, 80, 255)
 local OUTLINE_COLOR = Color3.fromRGB(255, 0, 0)
+local TEAM_COLOR   = Color3.fromRGB(0, 255, 0)
 
 local PlayerESP = {}
 local BotESP = {}
-local LOOK_LENGTH = 2.5
+local LOOK_LENGTH = 5
 
 local function IsAlive(character)
     if not character then return false end
     local hum = character:FindFirstChildOfClass("Humanoid")
     if not hum then return false end
     return hum.Health > 0
+end
+
+local function IsTeammate(player)
+    if Settings.TeammateName == "" then return false end
+    return string.lower(player.Name) == string.lower(Settings.TeammateName)
+        or string.lower(player.DisplayName) == string.lower(Settings.TeammateName)
 end
 
 local function CreateHighlight(character, fillColor)
@@ -53,8 +61,22 @@ local function CreateHighlight(character, fillColor)
     hl.FillTransparency = 0.75
     hl.OutlineTransparency = 0.75
     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Enabled = true
     hl.Parent = character
     return hl
+end
+
+local function ForceHighlight(hl, fillColor)
+    if not hl then return end
+    pcall(function()
+        hl.Enabled = true
+        hl.FillColor = fillColor
+        hl.OutlineColor = OUTLINE_COLOR
+        hl.FillTransparency = 0.75
+        hl.OutlineTransparency = 0.75
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Adornee = hl.Parent
+    end)
 end
 
 local function CreateBillboard(character)
@@ -161,6 +183,13 @@ local function RemovePlayerESP(player)
     end
 end
 
+local function GetFillColor(player, character)
+    if IsTeammate(player) then
+        return TEAM_COLOR
+    end
+    return IsAlive(character) and PLAYER_COLOR or DEAD_COLOR
+end
+
 local function ApplyPlayerESP(player)
     if player == LocalPlayer then return end
 
@@ -179,17 +208,20 @@ local function ApplyPlayerESP(player)
     end
 
     if Settings.PlayersESP then
-        local fillColor = IsAlive(character) and PLAYER_COLOR or DEAD_COLOR
+        local fillColor = GetFillColor(player, character)
 
         local hl = PlayerESP[player].Highlight
-        if not hl or not hl.Parent or hl.Adornee ~= character then
+        if not hl or not hl.Parent or hl.Parent ~= character then
             PlayerESP[player].Highlight = CreateHighlight(character, fillColor)
         else
-            hl.FillColor = fillColor
-            hl.OutlineColor = OUTLINE_COLOR
-            hl.FillTransparency = 0.75
-            hl.OutlineTransparency = 0.75
-            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            ForceHighlight(hl, fillColor)
+        end
+
+        -- Удаляем чужие Highlight'ы игры, чтобы наш всегда был сверху
+        for _, obj in ipairs(character:GetChildren()) do
+            if obj:IsA("Highlight") and obj.Name ~= "XenoESP_Highlight" then
+                pcall(function() obj:Destroy() end)
+            end
         end
 
         local bb = PlayerESP[player].Billboard
@@ -369,8 +401,8 @@ ScreenGui.Parent = CoreGui
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.new(0, 260, 0, 370)
-Main.Position = UDim2.new(0.5, -130, 0.5, -185)
+Main.Size = UDim2.new(0, 260, 0, 430)
+Main.Position = UDim2.new(0.5, -130, 0.5, -215)
 Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -385,7 +417,7 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 36)
 Title.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 Title.BorderSizePixel = 0
-Title.Text = "ESP"
+Title.Text = "XENO ESP"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 16
@@ -472,6 +504,42 @@ CreateToggle("Players Health", "PlayersHealth", 140)
 CreateToggle("Players Distance", "PlayersDistance", 185)
 CreateToggle("Players Look Vector", "PlayersLookVector", 230)
 CreateToggle("Bots ESP", "BotsESP", 275)
+
+local TeamLabel = Instance.new("TextLabel")
+TeamLabel.Size = UDim2.new(1, -20, 0, 18)
+TeamLabel.Position = UDim2.new(0, 10, 0, 320)
+TeamLabel.BackgroundTransparency = 1
+TeamLabel.Text = "Teammate Name:"
+TeamLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+TeamLabel.Font = Enum.Font.Gotham
+TeamLabel.TextSize = 13
+TeamLabel.TextXAlignment = Enum.TextXAlignment.Left
+TeamLabel.Parent = Main
+
+local TeamBox = Instance.new("TextBox")
+TeamBox.Size = UDim2.new(1, -20, 0, 28)
+TeamBox.Position = UDim2.new(0, 10, 0, 340)
+TeamBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+TeamBox.BorderSizePixel = 0
+TeamBox.Text = ""
+TeamBox.PlaceholderText = "Ник тимейта..."
+TeamBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+TeamBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+TeamBox.Font = Enum.Font.Gotham
+TeamBox.TextSize = 14
+TeamBox.ClearTextOnFocus = false
+TeamBox.Parent = Main
+
+local TeamBoxCorner = Instance.new("UICorner")
+TeamBoxCorner.CornerRadius = UDim.new(0, 6)
+TeamBoxCorner.Parent = TeamBox
+
+TeamBox.FocusLost:Connect(function()
+    Settings.TeammateName = TeamBox.Text
+    for _, plr in ipairs(Players:GetPlayers()) do
+        ApplyPlayerESP(plr)
+    end
+end)
 
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Size = UDim2.new(0, 28, 0, 28)
