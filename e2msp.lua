@@ -7,6 +7,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
 local LocalPlayer = Players.LocalPlayer
 
 pcall(function()
@@ -22,25 +23,39 @@ local Settings = {
     PlayersHealth = false,
     PlayersLookVector = false,
     BotsESP = false,
+    ExitsESP = false,
+    Fullbright = false,
     TeammateName = "",
+    LookLength = 5,
 }
 
 local PLAYER_COLOR = Color3.fromRGB(255, 255, 255)
-local DEAD_COLOR   = Color3.fromRGB(255, 0, 0)
-local BOT_COLOR    = Color3.fromRGB(255, 140, 0)
-local LOOK_COLOR   = Color3.fromRGB(0, 80, 255)
+local DEAD_COLOR = Color3.fromRGB(255, 0, 0)
+local BOT_COLOR = Color3.fromRGB(255, 140, 0)
+local LOOK_COLOR = Color3.fromRGB(0, 80, 255)
 local OUTLINE_COLOR = Color3.fromRGB(255, 0, 0)
-local TEAM_COLOR   = Color3.fromRGB(0, 255, 0)
+local TEAM_COLOR = Color3.fromRGB(0, 255, 0)
+local EXIT_COLOR = Color3.fromRGB(0, 255, 0)
 
 local PlayerESP = {}
 local BotESP = {}
-local LOOK_LENGTH = 5
+local ExitESP = {}
+local BotConnections = {}
+local ExitConnections = {}
 
-local function IsAlive(character)
-    if not character then return false end
-    local hum = character:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-    return hum.Health > 0
+local OriginalLighting = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+    GlobalShadows = Lighting.GlobalShadows,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    Ambient = Lighting.Ambient,
+}
+
+local function IsAlive(model)
+    if not model then return false end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    return hum and hum.Health > 0
 end
 
 local function IsTeammate(player)
@@ -49,25 +64,49 @@ local function IsTeammate(player)
         or string.lower(player.DisplayName) == string.lower(Settings.TeammateName)
 end
 
-local function CreateHighlight(character, fillColor)
-    local old = character:FindFirstChild("XenoESP_Highlight")
+local function SetFullbright(enabled)
+    if enabled then
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.FogEnd = 100000
+        Lighting.GlobalShadows = false
+        Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+        Lighting.Ambient = Color3.fromRGB(128, 128, 128)
+    else
+        Lighting.Brightness = OriginalLighting.Brightness
+        Lighting.ClockTime = OriginalLighting.ClockTime
+        Lighting.FogEnd = OriginalLighting.FogEnd
+        Lighting.GlobalShadows = OriginalLighting.GlobalShadows
+        Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+        Lighting.Ambient = OriginalLighting.Ambient
+    end
+end
+
+local function CreateHighlight(parent, fillColor)
+    if parent == LocalPlayer.Character then return nil end
+
+    local old = parent:FindFirstChild("XenoESP_Highlight")
     if old then old:Destroy() end
 
     local hl = Instance.new("Highlight")
     hl.Name = "XenoESP_Highlight"
-    hl.Adornee = character
+    hl.Adornee = parent
     hl.FillColor = fillColor
     hl.OutlineColor = OUTLINE_COLOR
     hl.FillTransparency = 0.75
     hl.OutlineTransparency = 0.75
     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     hl.Enabled = true
-    hl.Parent = character
+    hl.Parent = parent
     return hl
 end
 
 local function ForceHighlight(hl, fillColor)
-    if not hl then return end
+    if not hl or not hl.Parent then return end
+    if hl.Parent == LocalPlayer.Character then
+        pcall(function() hl:Destroy() end)
+        return
+    end
     pcall(function()
         hl.Enabled = true
         hl.FillColor = fillColor
@@ -75,7 +114,6 @@ local function ForceHighlight(hl, fillColor)
         hl.FillTransparency = 0.75
         hl.OutlineTransparency = 0.75
         hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Adornee = hl.Parent
     end)
 end
 
@@ -89,8 +127,8 @@ local function CreateBillboard(character)
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "XenoESP_Billboard"
     billboard.Adornee = head
-    billboard.Size = UDim2.new(0, 220, 0, 70)
-    billboard.StudsOffset = Vector3.new(0, 3.4, 0)
+    billboard.Size = UDim2.new(0, 220, 0, 60)
+    billboard.StudsOffset = Vector3.new(0, 3.5, 0)
     billboard.AlwaysOnTop = true
     billboard.MaxDistance = math.huge
     billboard.Parent = head
@@ -140,6 +178,34 @@ local function CreateBillboard(character)
     return billboard
 end
 
+local function CreateExitBillboard(part)
+    local old = part:FindFirstChild("XenoExit_Billboard")
+    if old then old:Destroy() end
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "XenoExit_Billboard"
+    billboard.Adornee = part
+    billboard.Size = UDim2.new(0, 100, 0, 20)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.MaxDistance = math.huge
+    billboard.Parent = part
+
+    local label = Instance.new("TextLabel")
+    label.Name = "ExitLabel"
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = "[Exit]"
+    label.TextColor3 = EXIT_COLOR
+    label.TextStrokeTransparency = 0.25
+    label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 10
+    label.Parent = billboard
+
+    return billboard
+end
+
 local function CreateLookPart()
     local part = Instance.new("Part")
     part.Name = "XenoESP_Look"
@@ -150,7 +216,7 @@ local function CreateLookPart()
     part.CastShadow = false
     part.Material = Enum.Material.Neon
     part.Color = LOOK_COLOR
-    part.Size = Vector3.new(0.035, 0.035, LOOK_LENGTH)
+    part.Size = Vector3.new(0.035, 0.035, Settings.LookLength)
     part.Transparency = 0
     part.Parent = Workspace
 
@@ -166,27 +232,27 @@ local function CreateLookPart()
     return part
 end
 
+local function UpdateLookPartsSize()
+    for _, data in pairs(PlayerESP) do
+        if data.LookPart and data.LookPart.Parent then
+            data.LookPart.Size = Vector3.new(0.035, 0.035, Settings.LookLength)
+        end
+    end
+end
+
 local function RemovePlayerESP(player)
     if PlayerESP[player] then
         pcall(function()
-            if PlayerESP[player].Highlight then
-                PlayerESP[player].Highlight:Destroy()
-            end
-            if PlayerESP[player].Billboard then
-                PlayerESP[player].Billboard:Destroy()
-            end
-            if PlayerESP[player].LookPart then
-                PlayerESP[player].LookPart:Destroy()
-            end
+            if PlayerESP[player].Highlight then PlayerESP[player].Highlight:Destroy() end
+            if PlayerESP[player].Billboard then PlayerESP[player].Billboard:Destroy() end
+            if PlayerESP[player].LookPart then PlayerESP[player].LookPart:Destroy() end
         end)
         PlayerESP[player] = nil
     end
 end
 
 local function GetFillColor(player, character)
-    if IsTeammate(player) then
-        return TEAM_COLOR
-    end
+    if IsTeammate(player) then return TEAM_COLOR end
     return IsAlive(character) and PLAYER_COLOR or DEAD_COLOR
 end
 
@@ -194,9 +260,7 @@ local function ApplyPlayerESP(player)
     if player == LocalPlayer then return end
 
     local character = player.Character
-    if not character or not character.Parent then
-        return
-    end
+    if not character or not character.Parent then return end
 
     if not Settings.PlayersESP and not Settings.PlayersLookVector then
         RemovePlayerESP(player)
@@ -217,7 +281,6 @@ local function ApplyPlayerESP(player)
             ForceHighlight(hl, fillColor)
         end
 
-        -- Удаляем чужие Highlight'ы игры, чтобы наш всегда был сверху
         for _, obj in ipairs(character:GetChildren()) do
             if obj:IsA("Highlight") and obj.Name ~= "XenoESP_Highlight" then
                 pcall(function() obj:Destroy() end)
@@ -260,6 +323,8 @@ local function ApplyPlayerESP(player)
     if Settings.PlayersLookVector then
         if not PlayerESP[player].LookPart or not PlayerESP[player].LookPart.Parent then
             PlayerESP[player].LookPart = CreateLookPart()
+        else
+            PlayerESP[player].LookPart.Size = Vector3.new(0.035, 0.035, Settings.LookLength)
         end
     else
         if PlayerESP[player].LookPart then
@@ -269,47 +334,172 @@ local function ApplyPlayerESP(player)
     end
 end
 
-local function IsBot(model)
-    if not model:IsA("Model") then return false end
-    if not model:FindFirstChildOfClass("Humanoid") then return false end
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr.Character == model then return false end
+local function TryAddBot(model)
+    if not Settings.BotsESP then return end
+    if not model:IsA("Model") then return end
+    if model == LocalPlayer.Character then return end
+    if not IsAlive(model) then return end
+
+    if not BotESP[model] or not BotESP[model].Parent then
+        local hl = CreateHighlight(model, BOT_COLOR)
+        if hl then
+            BotESP[model] = hl
+        end
     end
-    return true
 end
 
-local function UpdateBots()
-    if not Settings.BotsESP then
-        for model, hl in pairs(BotESP) do
-            pcall(function() hl:Destroy() end)
-        end
-        table.clear(BotESP)
-        return
+local function ClearBots()
+    for model, hl in pairs(BotESP) do
+        pcall(function() hl:Destroy() end)
     end
+    table.clear(BotESP)
+end
 
-    for _, obj in ipairs(Workspace:GetChildren()) do
-        if obj:IsA("Model") and IsBot(obj) then
-            if not BotESP[obj] or not BotESP[obj].Parent then
-                BotESP[obj] = CreateHighlight(obj, BOT_COLOR)
+local function ScanAiZones()
+    local aiZones = Workspace:FindFirstChild("AiZones")
+    if not aiZones then return end
+
+    for _, zone in ipairs(aiZones:GetChildren()) do
+        for _, model in ipairs(zone:GetChildren()) do
+            if model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") then
+                TryAddBot(model)
             end
         end
     end
+end
+
+local function StartBotTracking()
+    ClearBots()
+    ScanAiZones()
+
+    local aiZones = Workspace:FindFirstChild("AiZones")
+    if not aiZones then return end
+
+    for _, conn in pairs(BotConnections) do
+        conn:Disconnect()
+    end
+    table.clear(BotConnections)
+
+    table.insert(BotConnections, aiZones.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+            task.defer(TryAddBot, obj)
+        elseif obj:IsA("Humanoid") and obj.Parent and obj.Parent:IsA("Model") then
+            task.defer(TryAddBot, obj.Parent)
+        end
+    end))
+end
+
+local function StopBotTracking()
+    for _, conn in pairs(BotConnections) do
+        conn:Disconnect()
+    end
+    table.clear(BotConnections)
+    ClearBots()
+end
+
+local function MaintainBots()
+    if not Settings.BotsESP then return end
 
     for model, hl in pairs(BotESP) do
-        if not model.Parent or not IsBot(model) then
+        if not model or not model.Parent or model == LocalPlayer.Character or not IsAlive(model) then
             pcall(function() hl:Destroy() end)
             BotESP[model] = nil
+        else
+            ForceHighlight(hl, BOT_COLOR)
         end
     end
 end
 
-local lastBotUpdate = 0
+local function TryAddExit(obj)
+    if not Settings.ExitsESP then return end
+    if not obj:IsA("BasePart") and not obj:IsA("Model") then return end
+
+    local target = obj
+    if obj:IsA("Model") then
+        target = obj:FindFirstChildWhichIsA("BasePart") or obj.PrimaryPart
+        if not target then return end
+    end
+
+    if not ExitESP[obj] or not ExitESP[obj].Parent then
+        ExitESP[obj] = CreateExitBillboard(target)
+    end
+end
+
+local function ClearExits()
+    for obj, bb in pairs(ExitESP) do
+        pcall(function() bb:Destroy() end)
+    end
+    table.clear(ExitESP)
+end
+
+local function ScanExits()
+    local noCollision = Workspace:FindFirstChild("NoCollision")
+    if not noCollision then return end
+
+    local exitLocations = noCollision:FindFirstChild("ExitLocations")
+    if not exitLocations then return end
+
+    for _, obj in ipairs(exitLocations:GetChildren()) do
+        TryAddExit(obj)
+    end
+end
+
+local function StartExitTracking()
+    ClearExits()
+    ScanExits()
+
+    local noCollision = Workspace:FindFirstChild("NoCollision")
+    if not noCollision then return end
+
+    local exitLocations = noCollision:FindFirstChild("ExitLocations")
+    if not exitLocations then return end
+
+    for _, conn in pairs(ExitConnections) do
+        conn:Disconnect()
+    end
+    table.clear(ExitConnections)
+
+    table.insert(ExitConnections, exitLocations.ChildAdded:Connect(function(obj)
+        task.defer(TryAddExit, obj)
+    end))
+end
+
+local function StopExitTracking()
+    for _, conn in pairs(ExitConnections) do
+        conn:Disconnect()
+    end
+    table.clear(ExitConnections)
+    ClearExits()
+end
+
+local function MaintainExits()
+    if not Settings.ExitsESP then return end
+
+    for obj, bb in pairs(ExitESP) do
+        if not obj or not obj.Parent or not bb or not bb.Parent then
+            pcall(function() if bb then bb:Destroy() end end)
+            ExitESP[obj] = nil
+        end
+    end
+end
 
 RunService.Heartbeat:Connect(function()
+    if Settings.Fullbright then
+        SetFullbright(true)
+    end
+
+    if LocalPlayer.Character then
+        local myHl = LocalPlayer.Character:FindFirstChild("XenoESP_Highlight")
+        if myHl then pcall(function() myHl:Destroy() end) end
+        if BotESP[LocalPlayer.Character] then
+            pcall(function() BotESP[LocalPlayer.Character]:Destroy() end)
+            BotESP[LocalPlayer.Character] = nil
+        end
+    end
+
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
             local character = player.Character
-
             if character and character.Parent then
                 ApplyPlayerESP(player)
 
@@ -340,7 +530,7 @@ RunService.Heartbeat:Connect(function()
                     if head and lookPart then
                         local origin = head.Position
                         local look = head.CFrame.LookVector
-                        local mid = origin + look * (LOOK_LENGTH / 2)
+                        local mid = origin + look * (Settings.LookLength / 2)
                         lookPart.CFrame = CFrame.lookAt(mid, mid + look)
                     end
                 end
@@ -348,10 +538,8 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    if Settings.BotsESP and tick() - lastBotUpdate > 1.5 then
-        lastBotUpdate = tick()
-        UpdateBots()
-    end
+    MaintainBots()
+    MaintainExits()
 end)
 
 local function SetupPlayer(player)
@@ -365,11 +553,11 @@ local function SetupPlayer(player)
             if not hum then return end
 
             hum.Died:Connect(function()
-                task.wait(0.1)
+                task.wait(0.15)
                 ApplyPlayerESP(player)
             end)
 
-            task.wait(0.6)
+            task.wait(0.7)
             if player.Character == character then
                 ApplyPlayerESP(player)
             end
@@ -401,31 +589,27 @@ ScreenGui.Parent = CoreGui
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.new(0, 260, 0, 430)
-Main.Position = UDim2.new(0.5, -130, 0.5, -215)
+Main.Size = UDim2.new(0, 260, 0, 560)
+Main.Position = UDim2.new(0.5, -130, 0.5, -280)
 Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 Main.BorderSizePixel = 0
 Main.Active = true
 Main.Draggable = true
 Main.Parent = ScreenGui
 
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = Main
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 8)
 
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 36)
 Title.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 Title.BorderSizePixel = 0
-Title.Text = "XENO ESP"
+Title.Text = "ESP"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 16
 Title.Parent = Main
 
-local TitleCorner = Instance.new("UICorner")
-TitleCorner.CornerRadius = UDim.new(0, 8)
-TitleCorner.Parent = Title
+Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 8)
 
 local function CreateToggle(name, flag, yPos)
     local frame = Instance.new("Frame")
@@ -452,9 +636,7 @@ local function CreateToggle(name, flag, yPos)
     button.AutoButtonColor = false
     button.Parent = frame
 
-    local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 11)
-    btnCorner.Parent = button
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 11)
 
     local circle = Instance.new("Frame")
     circle.Size = UDim2.new(0, 18, 0, 18)
@@ -463,9 +645,7 @@ local function CreateToggle(name, flag, yPos)
     circle.BorderSizePixel = 0
     circle.Parent = button
 
-    local circleCorner = Instance.new("UICorner")
-    circleCorner.CornerRadius = UDim.new(1, 0)
-    circleCorner.Parent = circle
+    Instance.new("UICorner", circle).CornerRadius = UDim.new(1, 0)
 
     local enabled = false
 
@@ -486,12 +666,24 @@ local function CreateToggle(name, flag, yPos)
         Settings[flag] = enabled
         UpdateVisual()
 
-        if flag == "PlayersESP" or flag == "PlayersLookVector" or flag == "PlayersName" or flag == "PlayersDistance" or flag == "PlayersHealth" then
+        if flag == "BotsESP" then
+            if enabled then
+                StartBotTracking()
+            else
+                StopBotTracking()
+            end
+        elseif flag == "ExitsESP" then
+            if enabled then
+                StartExitTracking()
+            else
+                StopExitTracking()
+            end
+        elseif flag == "Fullbright" then
+            SetFullbright(enabled)
+        else
             for _, plr in ipairs(Players:GetPlayers()) do
                 ApplyPlayerESP(plr)
             end
-        elseif flag == "BotsESP" then
-            UpdateBots()
         end
     end)
 
@@ -504,10 +696,12 @@ CreateToggle("Players Health", "PlayersHealth", 140)
 CreateToggle("Players Distance", "PlayersDistance", 185)
 CreateToggle("Players Look Vector", "PlayersLookVector", 230)
 CreateToggle("Bots ESP", "BotsESP", 275)
+CreateToggle("Exits ESP", "ExitsESP", 320)
+CreateToggle("Fullbright", "Fullbright", 365)
 
 local TeamLabel = Instance.new("TextLabel")
 TeamLabel.Size = UDim2.new(1, -20, 0, 18)
-TeamLabel.Position = UDim2.new(0, 10, 0, 320)
+TeamLabel.Position = UDim2.new(0, 10, 0, 408)
 TeamLabel.BackgroundTransparency = 1
 TeamLabel.Text = "Teammate Name:"
 TeamLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
@@ -517,12 +711,12 @@ TeamLabel.TextXAlignment = Enum.TextXAlignment.Left
 TeamLabel.Parent = Main
 
 local TeamBox = Instance.new("TextBox")
-TeamBox.Size = UDim2.new(1, -20, 0, 28)
-TeamBox.Position = UDim2.new(0, 10, 0, 340)
+TeamBox.Size = UDim2.new(1, -20, 0, 26)
+TeamBox.Position = UDim2.new(0, 10, 0, 426)
 TeamBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 TeamBox.BorderSizePixel = 0
 TeamBox.Text = ""
-TeamBox.PlaceholderText = "Ник тимейта..."
+TeamBox.PlaceholderText = "Teammate username..."
 TeamBox.TextColor3 = Color3.fromRGB(255, 255, 255)
 TeamBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
 TeamBox.Font = Enum.Font.Gotham
@@ -530,14 +724,49 @@ TeamBox.TextSize = 14
 TeamBox.ClearTextOnFocus = false
 TeamBox.Parent = Main
 
-local TeamBoxCorner = Instance.new("UICorner")
-TeamBoxCorner.CornerRadius = UDim.new(0, 6)
-TeamBoxCorner.Parent = TeamBox
+Instance.new("UICorner", TeamBox).CornerRadius = UDim.new(0, 6)
 
 TeamBox.FocusLost:Connect(function()
     Settings.TeammateName = TeamBox.Text
     for _, plr in ipairs(Players:GetPlayers()) do
         ApplyPlayerESP(plr)
+    end
+end)
+
+local LookLabel = Instance.new("TextLabel")
+LookLabel.Size = UDim2.new(1, -20, 0, 18)
+LookLabel.Position = UDim2.new(0, 10, 0, 460)
+LookLabel.BackgroundTransparency = 1
+LookLabel.Text = "Look Length (studs):"
+LookLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+LookLabel.Font = Enum.Font.Gotham
+LookLabel.TextSize = 13
+LookLabel.TextXAlignment = Enum.TextXAlignment.Left
+LookLabel.Parent = Main
+
+local LookBox = Instance.new("TextBox")
+LookBox.Size = UDim2.new(1, -20, 0, 26)
+LookBox.Position = UDim2.new(0, 10, 0, 478)
+LookBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+LookBox.BorderSizePixel = 0
+LookBox.Text = "5"
+LookBox.PlaceholderText = "5"
+LookBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+LookBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+LookBox.Font = Enum.Font.Gotham
+LookBox.TextSize = 14
+LookBox.ClearTextOnFocus = false
+LookBox.Parent = Main
+
+Instance.new("UICorner", LookBox).CornerRadius = UDim.new(0, 6)
+
+LookBox.FocusLost:Connect(function()
+    local num = tonumber(LookBox.Text)
+    if num and num > 0 then
+        Settings.LookLength = num
+        UpdateLookPartsSize()
+    else
+        LookBox.Text = tostring(Settings.LookLength)
     end
 end)
 
@@ -551,9 +780,7 @@ CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 14
 CloseBtn.Parent = Main
 
-local CloseCorner = Instance.new("UICorner")
-CloseCorner.CornerRadius = UDim.new(0, 6)
-CloseCorner.Parent = CloseBtn
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
 
 CloseBtn.MouseButton1Click:Connect(function()
     ScreenGui:Destroy()
