@@ -8,6 +8,7 @@ local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
+local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
 pcall(function()
@@ -26,6 +27,9 @@ local Settings = {
     ExitsESP = false,
     TrapsESP = false,
     Fullbright = false,
+    AutoAim = false,
+    AimRadius = 100,
+    AimHead = true,
     TeammateName = "",
     LookLength = 5,
 }
@@ -46,6 +50,9 @@ local TrapESP = {}
 local BotConnections = {}
 local ExitConnections = {}
 local TrapConnection = nil
+
+local FOVCircle = nil
+local hasDrawing = pcall(function() return Drawing end) and Drawing ~= nil
 
 local OriginalLighting = {
     Brightness = Lighting.Brightness,
@@ -100,6 +107,71 @@ local function SetFullbright(enabled)
         Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
         Lighting.Ambient = OriginalLighting.Ambient
     end
+end
+
+local function CreateFOVCircle()
+    if FOVCircle then
+        pcall(function() FOVCircle:Remove() end)
+        FOVCircle = nil
+    end
+    if not hasDrawing then return end
+    FOVCircle = Drawing.new("Circle")
+    FOVCircle.Visible = false
+    FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+    FOVCircle.Thickness = 1.5
+    FOVCircle.NumSides = 64
+    FOVCircle.Filled = false
+    FOVCircle.Transparency = 1
+    FOVCircle.Radius = Settings.AimRadius
+end
+
+local function UpdateFOVCircle()
+    if not FOVCircle then return end
+    local viewport = Camera.ViewportSize
+    FOVCircle.Position = Vector2.new(viewport.X / 2, viewport.Y / 2)
+    FOVCircle.Radius = Settings.AimRadius
+    FOVCircle.Visible = Settings.AutoAim
+end
+
+local function GetAimPart(character)
+    if Settings.AimHead then
+        return character:FindFirstChild("Head")
+    else
+        return character:FindFirstChild("UpperTorso")
+            or character:FindFirstChild("Torso")
+            or character:FindFirstChild("HumanoidRootPart")
+    end
+end
+
+local function GetClosestTarget()
+    local closest = nil
+    local closestDist = Settings.AimRadius
+    local viewport = Camera.ViewportSize
+    local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if IsTeammate(player) then continue end
+
+        local character = player.Character
+        if not character or not IsAlive(character) then continue end
+
+        local part = GetAimPart(character)
+        if not part then continue end
+
+        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+
+        local pos2d = Vector2.new(screenPos.X, screenPos.Y)
+        local dist = (pos2d - center).Magnitude
+
+        if dist < closestDist then
+            closestDist = dist
+            closest = part
+        end
+    end
+
+    return closest
 end
 
 local function CreateHighlight(parent, fillColor)
@@ -362,9 +434,7 @@ local function TryAddBot(model)
 
     if not BotESP[model] or not BotESP[model].Parent then
         local hl = CreateHighlight(model, BOT_COLOR)
-        if hl then
-            BotESP[model] = hl
-        end
+        if hl then BotESP[model] = hl end
     end
 end
 
@@ -378,7 +448,6 @@ end
 local function ScanAiZones()
     local aiZones = Workspace:FindFirstChild("AiZones")
     if not aiZones then return end
-
     for _, zone in ipairs(aiZones:GetChildren()) do
         for _, model in ipairs(zone:GetChildren()) do
             if model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") then
@@ -391,15 +460,10 @@ end
 local function StartBotTracking()
     ClearBots()
     ScanAiZones()
-
     local aiZones = Workspace:FindFirstChild("AiZones")
     if not aiZones then return end
-
-    for _, conn in pairs(BotConnections) do
-        conn:Disconnect()
-    end
+    for _, conn in pairs(BotConnections) do conn:Disconnect() end
     table.clear(BotConnections)
-
     table.insert(BotConnections, aiZones.DescendantAdded:Connect(function(obj)
         if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
             task.defer(TryAddBot, obj)
@@ -410,16 +474,13 @@ local function StartBotTracking()
 end
 
 local function StopBotTracking()
-    for _, conn in pairs(BotConnections) do
-        conn:Disconnect()
-    end
+    for _, conn in pairs(BotConnections) do conn:Disconnect() end
     table.clear(BotConnections)
     ClearBots()
 end
 
 local function MaintainBots()
     if not Settings.BotsESP then return end
-
     for model, hl in pairs(BotESP) do
         if not model or not model.Parent or model == LocalPlayer.Character or not IsAlive(model) then
             pcall(function() hl:Destroy() end)
@@ -433,13 +494,11 @@ end
 local function TryAddExit(obj)
     if not Settings.ExitsESP then return end
     if not obj:IsA("BasePart") and not obj:IsA("Model") then return end
-
     local target = obj
     if obj:IsA("Model") then
         target = obj:FindFirstChildWhichIsA("BasePart") or obj.PrimaryPart
         if not target then return end
     end
-
     if not ExitESP[obj] or not ExitESP[obj].Parent then
         ExitESP[obj] = CreateExitBillboard(target)
     end
@@ -455,10 +514,8 @@ end
 local function ScanExits()
     local noCollision = Workspace:FindFirstChild("NoCollision")
     if not noCollision then return end
-
     local exitLocations = noCollision:FindFirstChild("ExitLocations")
     if not exitLocations then return end
-
     for _, obj in ipairs(exitLocations:GetChildren()) do
         TryAddExit(obj)
     end
@@ -467,34 +524,25 @@ end
 local function StartExitTracking()
     ClearExits()
     ScanExits()
-
     local noCollision = Workspace:FindFirstChild("NoCollision")
     if not noCollision then return end
-
     local exitLocations = noCollision:FindFirstChild("ExitLocations")
     if not exitLocations then return end
-
-    for _, conn in pairs(ExitConnections) do
-        conn:Disconnect()
-    end
+    for _, conn in pairs(ExitConnections) do conn:Disconnect() end
     table.clear(ExitConnections)
-
     table.insert(ExitConnections, exitLocations.ChildAdded:Connect(function(obj)
         task.defer(TryAddExit, obj)
     end))
 end
 
 local function StopExitTracking()
-    for _, conn in pairs(ExitConnections) do
-        conn:Disconnect()
-    end
+    for _, conn in pairs(ExitConnections) do conn:Disconnect() end
     table.clear(ExitConnections)
     ClearExits()
 end
 
 local function MaintainExits()
     if not Settings.ExitsESP then return end
-
     for obj, bb in pairs(ExitESP) do
         if not obj or not obj.Parent or not bb or not bb.Parent then
             pcall(function() if bb then bb:Destroy() end end)
@@ -507,18 +555,14 @@ local function TryAddTrap(obj)
     if not Settings.TrapsESP then return end
     if not IsTrap(obj) then return end
     if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
-
     local target = obj
     if obj:IsA("Model") then
         target = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
         if not target then target = obj end
     end
-
     if not TrapESP[obj] or not TrapESP[obj].Parent then
         local hl = CreateHighlight(target, TRAP_COLOR)
-        if hl then
-            TrapESP[obj] = hl
-        end
+        if hl then TrapESP[obj] = hl end
     end
 end
 
@@ -531,23 +575,16 @@ end
 
 local function ScanTraps()
     for _, obj in ipairs(Workspace:GetDescendants()) do
-        if IsTrap(obj) then
-            TryAddTrap(obj)
-        end
+        if IsTrap(obj) then TryAddTrap(obj) end
     end
 end
 
 local function StartTrapTracking()
     ClearTraps()
     task.spawn(ScanTraps)
-
-    if TrapConnection then
-        TrapConnection:Disconnect()
-    end
+    if TrapConnection then TrapConnection:Disconnect() end
     TrapConnection = Workspace.DescendantAdded:Connect(function(obj)
-        if IsTrap(obj) then
-            task.defer(TryAddTrap, obj)
-        end
+        if IsTrap(obj) then task.defer(TryAddTrap, obj) end
     end)
 end
 
@@ -561,7 +598,6 @@ end
 
 local function MaintainTraps()
     if not Settings.TrapsESP then return end
-
     for obj, hl in pairs(TrapESP) do
         if not obj or not obj.Parent or not hl or not hl.Parent then
             pcall(function() if hl then hl:Destroy() end end)
@@ -571,6 +607,22 @@ local function MaintainTraps()
         end
     end
 end
+
+CreateFOVCircle()
+
+RunService.RenderStepped:Connect(function()
+    UpdateFOVCircle()
+
+    if Settings.AutoAim then
+        local aiming = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        if aiming then
+            local target = GetClosestTarget()
+            if target then
+                Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, target.Position)
+            end
+        end
+    end
+end)
 
 RunService.Heartbeat:Connect(function()
     if Settings.Fullbright then
@@ -634,42 +686,28 @@ end)
 
 local function SetupPlayer(player)
     if player == LocalPlayer then return end
-
     local function onCharacterAdded(character)
         RemovePlayerESP(player)
-
         task.spawn(function()
             local hum = character:WaitForChild("Humanoid", 8)
             if not hum then return end
-
             hum.Died:Connect(function()
                 task.wait(0.15)
                 ApplyPlayerESP(player)
             end)
-
             task.wait(0.7)
             if player.Character == character then
                 ApplyPlayerESP(player)
             end
         end)
     end
-
     player.CharacterAdded:Connect(onCharacterAdded)
-
-    if player.Character then
-        onCharacterAdded(player.Character)
-    end
+    if player.Character then onCharacterAdded(player.Character) end
 end
 
-for _, player in ipairs(Players:GetPlayers()) do
-    SetupPlayer(player)
-end
-
+for _, player in ipairs(Players:GetPlayers()) do SetupPlayer(player) end
 Players.PlayerAdded:Connect(SetupPlayer)
-
-Players.PlayerRemoving:Connect(function(player)
-    RemovePlayerESP(player)
-end)
+Players.PlayerRemoving:Connect(function(player) RemovePlayerESP(player) end)
 
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "XenoESP_UI"
@@ -679,8 +717,8 @@ ScreenGui.Parent = CoreGui
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.new(0, 260, 0, 600)
-Main.Position = UDim2.new(0.5, -130, 0.5, -300)
+Main.Size = UDim2.new(0, 260, 0, 720)
+Main.Position = UDim2.new(0.5, -130, 0.5, -360)
 Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -737,7 +775,7 @@ local function CreateToggle(name, flag, yPos)
 
     Instance.new("UICorner", circle).CornerRadius = UDim.new(1, 0)
 
-    local enabled = false
+    local enabled = Settings[flag] == true
 
     local function UpdateVisual()
         if enabled then
@@ -764,6 +802,8 @@ local function CreateToggle(name, flag, yPos)
             if enabled then StartTrapTracking() else StopTrapTracking() end
         elseif flag == "Fullbright" then
             SetFullbright(enabled)
+        elseif flag == "AutoAim" then
+            UpdateFOVCircle()
         else
             for _, plr in ipairs(Players:GetPlayers()) do
                 ApplyPlayerESP(plr)
@@ -784,9 +824,59 @@ CreateToggle("Exits ESP", "ExitsESP", 320)
 CreateToggle("Traps ESP", "TrapsESP", 365)
 CreateToggle("Fullbright", "Fullbright", 410)
 
+local AimSep = Instance.new("TextLabel")
+AimSep.Size = UDim2.new(1, -20, 0, 20)
+AimSep.Position = UDim2.new(0, 10, 0, 450)
+AimSep.BackgroundTransparency = 1
+AimSep.Text = "— Aim —"
+AimSep.TextColor3 = Color3.fromRGB(150, 150, 160)
+AimSep.Font = Enum.Font.GothamBold
+AimSep.TextSize = 13
+AimSep.Parent = Main
+
+CreateToggle("Auto Aim", "AutoAim", 470)
+CreateToggle("Aim at Head", "AimHead", 515)
+
+local RadiusLabel = Instance.new("TextLabel")
+RadiusLabel.Size = UDim2.new(1, -20, 0, 18)
+RadiusLabel.Position = UDim2.new(0, 10, 0, 556)
+RadiusLabel.BackgroundTransparency = 1
+RadiusLabel.Text = "Aim Radius (min 5):"
+RadiusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+RadiusLabel.Font = Enum.Font.Gotham
+RadiusLabel.TextSize = 13
+RadiusLabel.TextXAlignment = Enum.TextXAlignment.Left
+RadiusLabel.Parent = Main
+
+local RadiusBox = Instance.new("TextBox")
+RadiusBox.Size = UDim2.new(1, -20, 0, 26)
+RadiusBox.Position = UDim2.new(0, 10, 0, 574)
+RadiusBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+RadiusBox.BorderSizePixel = 0
+RadiusBox.Text = "100"
+RadiusBox.PlaceholderText = "100"
+RadiusBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+RadiusBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+RadiusBox.Font = Enum.Font.Gotham
+RadiusBox.TextSize = 14
+RadiusBox.ClearTextOnFocus = false
+RadiusBox.Parent = Main
+
+Instance.new("UICorner", RadiusBox).CornerRadius = UDim.new(0, 6)
+
+RadiusBox.FocusLost:Connect(function()
+    local num = tonumber(RadiusBox.Text)
+    if num and num >= 5 then
+        Settings.AimRadius = num
+        UpdateFOVCircle()
+    else
+        RadiusBox.Text = tostring(Settings.AimRadius)
+    end
+end)
+
 local TeamLabel = Instance.new("TextLabel")
 TeamLabel.Size = UDim2.new(1, -20, 0, 18)
-TeamLabel.Position = UDim2.new(0, 10, 0, 452)
+TeamLabel.Position = UDim2.new(0, 10, 0, 610)
 TeamLabel.BackgroundTransparency = 1
 TeamLabel.Text = "Teammate Name:"
 TeamLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
@@ -797,7 +887,7 @@ TeamLabel.Parent = Main
 
 local TeamBox = Instance.new("TextBox")
 TeamBox.Size = UDim2.new(1, -20, 0, 26)
-TeamBox.Position = UDim2.new(0, 10, 0, 470)
+TeamBox.Position = UDim2.new(0, 10, 0, 628)
 TeamBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 TeamBox.BorderSizePixel = 0
 TeamBox.Text = ""
@@ -820,7 +910,7 @@ end)
 
 local LookLabel = Instance.new("TextLabel")
 LookLabel.Size = UDim2.new(1, -20, 0, 18)
-LookLabel.Position = UDim2.new(0, 10, 0, 504)
+LookLabel.Position = UDim2.new(0, 10, 0, 662)
 LookLabel.BackgroundTransparency = 1
 LookLabel.Text = "Look Length (studs):"
 LookLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
@@ -831,7 +921,7 @@ LookLabel.Parent = Main
 
 local LookBox = Instance.new("TextBox")
 LookBox.Size = UDim2.new(1, -20, 0, 26)
-LookBox.Position = UDim2.new(0, 10, 0, 522)
+LookBox.Position = UDim2.new(0, 10, 0, 680)
 LookBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 LookBox.BorderSizePixel = 0
 LookBox.Text = "5"
@@ -868,6 +958,7 @@ CloseBtn.Parent = Main
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
 
 CloseBtn.MouseButton1Click:Connect(function()
+    if FOVCircle then pcall(function() FOVCircle:Remove() end) end
     ScreenGui:Destroy()
 end)
 
