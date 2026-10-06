@@ -32,13 +32,17 @@ local Settings = {
     AimNPCs = false,
     AimRadius = 100,
     AimHead = true,
+    AimYOffset = 0,
+    Prediction = 0.15,
+    AutoPredict = true,
+    BulletSpeed = 900,
     TeammateName = "",
     LookLength = 5,
 }
 
 local PLAYER_COLOR = Color3.fromRGB(255, 255, 255)
 local DEAD_COLOR = Color3.fromRGB(255, 0, 0)
-local BOT_COLOR = Color3.fromRGB(255, 140, 0)
+local BOT_COLOR = Color3.fromRGB(255, 255, 0)
 local LOOK_COLOR = Color3.fromRGB(0, 80, 255)
 local OUTLINE_COLOR = Color3.fromRGB(255, 0, 0)
 local TEAM_COLOR = Color3.fromRGB(0, 255, 0)
@@ -71,6 +75,14 @@ local TrapKeywords = {
     "f1 trap", "f1trap", "landmine", "claymore", "mine"
 }
 
+local BodyParts = {
+    "Head", "UpperTorso", "LowerTorso", "Torso", "HumanoidRootPart",
+    "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm",
+    "LeftHand", "RightHand", "LeftUpperLeg", "RightUpperLeg",
+    "LeftLowerLeg", "RightLowerLeg", "LeftFoot", "RightFoot",
+    "Left Arm", "Right Arm", "Left Leg", "Right Leg",
+}
+
 local function IsAlive(model)
     if not model then return false end
     local hum = model:FindFirstChildOfClass("Humanoid")
@@ -87,9 +99,7 @@ local function IsTrap(obj)
     if not obj then return false end
     local name = string.lower(obj.Name)
     for _, kw in ipairs(TrapKeywords) do
-        if string.find(name, kw, 1, true) then
-            return true
-        end
+        if string.find(name, kw, 1, true) then return true end
     end
     return false
 end
@@ -113,10 +123,7 @@ local function SetFullbright(enabled)
 end
 
 local function CreateFOVCircle()
-    if FOVCircle then
-        pcall(function() FOVCircle:Remove() end)
-        FOVCircle = nil
-    end
+    if FOVCircle then pcall(function() FOVCircle:Remove() end) FOVCircle = nil end
     if not hasDrawing then return end
     FOVCircle = Drawing.new("Circle")
     FOVCircle.Visible = false
@@ -146,29 +153,92 @@ local function GetAimPart(character)
     end
 end
 
+local function GetVelocity(model)
+    local hrp = model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("Torso")
+        or model:FindFirstChild("UpperTorso")
+    if hrp then
+        return hrp.AssemblyLinearVelocity
+    end
+    return Vector3.zero
+end
+
+local function GetPredictedPosition(part, model)
+    local camPos = Camera.CFrame.Position
+    local targetPos = part.Position
+    local dist = (targetPos - camPos).Magnitude
+    local velocity = GetVelocity(model)
+
+    local lead
+    if Settings.AutoPredict then
+        local speed = math.max(Settings.BulletSpeed, 100)
+        local timeToHit = dist / speed
+        local speedFactor = math.clamp(velocity.Magnitude / 20, 0, 1)
+        lead = timeToHit * (0.85 + speedFactor * 0.35)
+        lead = math.clamp(lead, 0.02, 0.55)
+    else
+        lead = Settings.Prediction
+    end
+
+    local yDrop
+    if Settings.AimYOffset ~= 0 then
+        yDrop = Settings.AimYOffset
+    else
+        yDrop = math.clamp(dist / 350, 0, 2.5)
+    end
+
+    return targetPos + velocity * lead + Vector3.new(0, yDrop, 0)
+end
+
+local function IsPartInFOV(part, center, radius)
+    if not part then return false, math.huge end
+    local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+    if not onScreen or screenPos.Z < 0 then return false, math.huge end
+    local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+    return dist <= radius, dist
+end
+
 local function GetClosestTarget()
-    local closest = nil
+    local closestPart = nil
+    local closestModel = nil
     local closestDist = Settings.AimRadius
     local viewport = Camera.ViewportSize
     local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
 
-    local function checkTarget(model)
+    local function checkModel(model)
         if not model or not IsAlive(model) then return end
-        local part = GetAimPart(model)
-        if not part then return end
-        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
-        if not onScreen then return end
-        local pos2d = Vector2.new(screenPos.X, screenPos.Y)
-        local dist = (pos2d - center).Magnitude
-        if dist < closestDist then
-            closestDist = dist
-            closest = part
+
+        local anyInFOV = false
+        local bestPartDist = math.huge
+
+        for _, partName in ipairs(BodyParts) do
+            local part = model:FindFirstChild(partName)
+            if part and part:IsA("BasePart") then
+                local inFOV, dist = IsPartInFOV(part, center, Settings.AimRadius)
+                if inFOV then
+                    anyInFOV = true
+                    if dist < bestPartDist then
+                        bestPartDist = dist
+                    end
+                end
+            end
+        end
+
+        if not anyInFOV then return end
+
+        local aimPart = GetAimPart(model)
+        if not aimPart then return end
+
+        if bestPartDist < closestDist then
+            closestDist = bestPartDist
+            closestPart = aimPart
+            closestModel = model
         end
     end
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and not IsTeammate(player) then
-            checkTarget(player.Character)
+            checkModel(player.Character)
         end
     end
 
@@ -178,14 +248,14 @@ local function GetClosestTarget()
             for _, zone in ipairs(aiZones:GetChildren()) do
                 for _, model in ipairs(zone:GetChildren()) do
                     if model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") then
-                        checkTarget(model)
+                        checkModel(model)
                     end
                 end
             end
         end
     end
 
-    return closest
+    return closestPart, closestModel
 end
 
 local function CreateHighlight(parent, fillColor)
@@ -293,7 +363,6 @@ local function CreateNPCHealthBillboard(model)
     billboard.AlwaysOnTop = true
     billboard.MaxDistance = math.huge
     billboard.Parent = head
-
     local label = Instance.new("TextLabel")
     label.Name = "HealthLabel"
     label.Size = UDim2.new(1, 0, 1, 0)
@@ -305,7 +374,6 @@ local function CreateNPCHealthBillboard(model)
     label.TextSize = 10
     label.Text = ""
     label.Parent = billboard
-
     return billboard
 end
 
@@ -386,10 +454,13 @@ local function ApplyPlayerESP(player)
     if player == LocalPlayer then return end
     local character = player.Character
     if not character or not character.Parent then return end
-    if not Settings.PlayersESP and not Settings.PlayersLookVector then
+
+    local needAny = Settings.PlayersESP or Settings.PlayersLookVector
+    if not needAny then
         RemovePlayerESP(player)
         return
     end
+
     if not PlayerESP[player] then PlayerESP[player] = {} end
 
     if Settings.PlayersESP then
@@ -451,14 +522,12 @@ local function TryAddBot(model)
     if not model:IsA("Model") then return end
     if model == LocalPlayer.Character then return end
     if not IsAlive(model) then return end
-
     if Settings.BotsESP then
         if not BotESP[model] or not BotESP[model].Parent then
             local hl = CreateHighlight(model, BOT_COLOR)
             if hl then BotESP[model] = hl end
         end
     end
-
     if Settings.NPCHealth then
         if not BotHealth[model] or not BotHealth[model].Parent then
             BotHealth[model] = CreateNPCHealthBillboard(model)
@@ -467,16 +536,12 @@ local function TryAddBot(model)
 end
 
 local function ClearBots()
-    for model, hl in pairs(BotESP) do
-        pcall(function() hl:Destroy() end)
-    end
+    for model, hl in pairs(BotESP) do pcall(function() hl:Destroy() end) end
     table.clear(BotESP)
 end
 
 local function ClearBotHealth()
-    for model, bb in pairs(BotHealth) do
-        pcall(function() bb:Destroy() end)
-    end
+    for model, bb in pairs(BotHealth) do pcall(function() bb:Destroy() end) end
     table.clear(BotHealth)
 end
 
@@ -525,7 +590,6 @@ local function MaintainBots()
             ForceHighlight(hl, BOT_COLOR)
         end
     end
-
     for model, bb in pairs(BotHealth) do
         if not Settings.NPCHealth or not model or not model.Parent or not IsAlive(model) then
             pcall(function() bb:Destroy() end)
@@ -554,9 +618,7 @@ local function TryAddExit(obj)
 end
 
 local function ClearExits()
-    for obj, bb in pairs(ExitESP) do
-        pcall(function() bb:Destroy() end)
-    end
+    for obj, bb in pairs(ExitESP) do pcall(function() bb:Destroy() end) end
     table.clear(ExitESP)
 end
 
@@ -565,9 +627,7 @@ local function ScanExits()
     if not noCollision then return end
     local exitLocations = noCollision:FindFirstChild("ExitLocations")
     if not exitLocations then return end
-    for _, obj in ipairs(exitLocations:GetChildren()) do
-        TryAddExit(obj)
-    end
+    for _, obj in ipairs(exitLocations:GetChildren()) do TryAddExit(obj) end
 end
 
 local function StartExitTracking()
@@ -606,8 +666,7 @@ local function TryAddTrap(obj)
     if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
     local target = obj
     if obj:IsA("Model") then
-        target = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-        if not target then target = obj end
+        target = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart") or obj
     end
     if not TrapESP[obj] or not TrapESP[obj].Parent then
         local hl = CreateHighlight(target, TRAP_COLOR)
@@ -616,9 +675,7 @@ local function TryAddTrap(obj)
 end
 
 local function ClearTraps()
-    for obj, hl in pairs(TrapESP) do
-        pcall(function() hl:Destroy() end)
-    end
+    for obj, hl in pairs(TrapESP) do pcall(function() hl:Destroy() end) end
     table.clear(TrapESP)
 end
 
@@ -638,10 +695,7 @@ local function StartTrapTracking()
 end
 
 local function StopTrapTracking()
-    if TrapConnection then
-        TrapConnection:Disconnect()
-        TrapConnection = nil
-    end
+    if TrapConnection then TrapConnection:Disconnect() TrapConnection = nil end
     ClearTraps()
 end
 
@@ -661,12 +715,13 @@ CreateFOVCircle()
 
 RunService.RenderStepped:Connect(function()
     UpdateFOVCircle()
+
     if Settings.AutoAim then
-        local aiming = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-        if aiming then
-            local target = GetClosestTarget()
-            if target then
-                Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, target.Position)
+        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+            local part, model = GetClosestTarget()
+            if part and model then
+                local aimPos = GetPredictedPosition(part, model)
+                Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, aimPos)
             end
         end
     end
@@ -701,8 +756,7 @@ RunService.Heartbeat:Connect(function()
                         healthLabel.Visible = true
                     end
                     if Settings.PlayersDistance and distLabel and hrp and myHrp then
-                        local dist = math.floor((hrp.Position - myHrp.Position).Magnitude)
-                        distLabel.Text = dist .. " S"
+                        distLabel.Text = math.floor((hrp.Position - myHrp.Position).Magnitude) .. " S"
                         distLabel.Visible = true
                     end
                 end
@@ -712,8 +766,7 @@ RunService.Heartbeat:Connect(function()
                     if head and lookPart then
                         local origin = head.Position
                         local look = head.CFrame.LookVector
-                        local mid = origin + look * (Settings.LookLength / 2)
-                        lookPart.CFrame = CFrame.lookAt(mid, mid + look)
+                        lookPart.CFrame = CFrame.lookAt(origin + look * (Settings.LookLength / 2), origin + look * Settings.LookLength)
                     end
                 end
             end
@@ -756,8 +809,8 @@ ScreenGui.Parent = CoreGui
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.new(0, 260, 0, 800)
-Main.Position = UDim2.new(0.5, -130, 0.5, -400)
+Main.Size = UDim2.new(0, 260, 0, 980)
+Main.Position = UDim2.new(0.5, -130, 0.5, -490)
 Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -834,11 +887,7 @@ local function CreateToggle(name, flag, yPos)
         UpdateVisual()
 
         if flag == "BotsESP" or flag == "NPCHealth" then
-            if Settings.BotsESP or Settings.NPCHealth then
-                StartBotTracking()
-            else
-                StopBotTracking()
-            end
+            if Settings.BotsESP or Settings.NPCHealth then StartBotTracking() else StopBotTracking() end
             if not Settings.BotsESP then ClearBots() end
             if not Settings.NPCHealth then ClearBotHealth() end
             if Settings.BotsESP or Settings.NPCHealth then ScanAiZones() end
@@ -884,113 +933,66 @@ AimSep.Parent = Main
 CreateToggle("Auto Aim", "AutoAim", 515)
 CreateToggle("Aim NPCs", "AimNPCs", 560)
 CreateToggle("Aim at Head", "AimHead", 605)
+CreateToggle("Auto Predict", "AutoPredict", 650)
 
-local RadiusLabel = Instance.new("TextLabel")
-RadiusLabel.Size = UDim2.new(1, -20, 0, 18)
-RadiusLabel.Position = UDim2.new(0, 10, 0, 646)
-RadiusLabel.BackgroundTransparency = 1
-RadiusLabel.Text = "Aim Radius (min 5):"
-RadiusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-RadiusLabel.Font = Enum.Font.Gotham
-RadiusLabel.TextSize = 13
-RadiusLabel.TextXAlignment = Enum.TextXAlignment.Left
-RadiusLabel.Parent = Main
+local function MakeField(labelText, default, y, onCommit)
+    local lab = Instance.new("TextLabel")
+    lab.Size = UDim2.new(1, -20, 0, 16)
+    lab.Position = UDim2.new(0, 10, 0, y)
+    lab.BackgroundTransparency = 1
+    lab.Text = labelText
+    lab.TextColor3 = Color3.fromRGB(180, 180, 180)
+    lab.Font = Enum.Font.Gotham
+    lab.TextSize = 12
+    lab.TextXAlignment = Enum.TextXAlignment.Left
+    lab.Parent = Main
 
-local RadiusBox = Instance.new("TextBox")
-RadiusBox.Size = UDim2.new(1, -20, 0, 26)
-RadiusBox.Position = UDim2.new(0, 10, 0, 664)
-RadiusBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-RadiusBox.BorderSizePixel = 0
-RadiusBox.Text = "100"
-RadiusBox.PlaceholderText = "100"
-RadiusBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-RadiusBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
-RadiusBox.Font = Enum.Font.Gotham
-RadiusBox.TextSize = 14
-RadiusBox.ClearTextOnFocus = false
-RadiusBox.Parent = Main
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1, -20, 0, 24)
+    box.Position = UDim2.new(0, 10, 0, y + 16)
+    box.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+    box.BorderSizePixel = 0
+    box.Text = default
+    box.PlaceholderText = default
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 13
+    box.ClearTextOnFocus = false
+    box.Parent = Main
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+    box.FocusLost:Connect(function() onCommit(box) end)
+    return box
+end
 
-Instance.new("UICorner", RadiusBox).CornerRadius = UDim.new(0, 6)
-
-RadiusBox.FocusLost:Connect(function()
-    local num = tonumber(RadiusBox.Text)
-    if num and num >= 5 then
-        Settings.AimRadius = num
-        UpdateFOVCircle()
-    else
-        RadiusBox.Text = tostring(Settings.AimRadius)
-    end
+MakeField("Aim Radius (min 5):", "100", 695, function(box)
+    local n = tonumber(box.Text)
+    if n and n >= 5 then Settings.AimRadius = n UpdateFOVCircle() else box.Text = tostring(Settings.AimRadius) end
 end)
 
-local TeamLabel = Instance.new("TextLabel")
-TeamLabel.Size = UDim2.new(1, -20, 0, 18)
-TeamLabel.Position = UDim2.new(0, 10, 0, 700)
-TeamLabel.BackgroundTransparency = 1
-TeamLabel.Text = "Teammate Name:"
-TeamLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-TeamLabel.Font = Enum.Font.Gotham
-TeamLabel.TextSize = 13
-TeamLabel.TextXAlignment = Enum.TextXAlignment.Left
-TeamLabel.Parent = Main
-
-local TeamBox = Instance.new("TextBox")
-TeamBox.Size = UDim2.new(1, -20, 0, 26)
-TeamBox.Position = UDim2.new(0, 10, 0, 718)
-TeamBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-TeamBox.BorderSizePixel = 0
-TeamBox.Text = ""
-TeamBox.PlaceholderText = "Teammate username..."
-TeamBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-TeamBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
-TeamBox.Font = Enum.Font.Gotham
-TeamBox.TextSize = 14
-TeamBox.ClearTextOnFocus = false
-TeamBox.Parent = Main
-
-Instance.new("UICorner", TeamBox).CornerRadius = UDim.new(0, 6)
-
-TeamBox.FocusLost:Connect(function()
-    Settings.TeammateName = TeamBox.Text
-    for _, plr in ipairs(Players:GetPlayers()) do
-        ApplyPlayerESP(plr)
-    end
+MakeField("Y Offset (0 = auto drop):", "0", 745, function(box)
+    local n = tonumber(box.Text)
+    if n then Settings.AimYOffset = n else box.Text = tostring(Settings.AimYOffset) end
 end)
 
-local LookLabel = Instance.new("TextLabel")
-LookLabel.Size = UDim2.new(1, -20, 0, 18)
-LookLabel.Position = UDim2.new(0, 10, 0, 752)
-LookLabel.BackgroundTransparency = 1
-LookLabel.Text = "Look Length (studs):"
-LookLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-LookLabel.Font = Enum.Font.Gotham
-LookLabel.TextSize = 13
-LookLabel.TextXAlignment = Enum.TextXAlignment.Left
-LookLabel.Parent = Main
+MakeField("Prediction (if Auto off):", "0.15", 795, function(box)
+    local n = tonumber(box.Text)
+    if n and n >= 0 then Settings.Prediction = n else box.Text = tostring(Settings.Prediction) end
+end)
 
-local LookBox = Instance.new("TextBox")
-LookBox.Size = UDim2.new(1, -20, 0, 26)
-LookBox.Position = UDim2.new(0, 10, 0, 770)
-LookBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-LookBox.BorderSizePixel = 0
-LookBox.Text = "5"
-LookBox.PlaceholderText = "5"
-LookBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-LookBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
-LookBox.Font = Enum.Font.Gotham
-LookBox.TextSize = 14
-LookBox.ClearTextOnFocus = false
-LookBox.Parent = Main
+MakeField("Bullet Speed (auto pred):", "900", 845, function(box)
+    local n = tonumber(box.Text)
+    if n and n >= 100 then Settings.BulletSpeed = n else box.Text = tostring(Settings.BulletSpeed) end
+end)
 
-Instance.new("UICorner", LookBox).CornerRadius = UDim.new(0, 6)
+MakeField("Teammate Name:", "", 895, function(box)
+    Settings.TeammateName = box.Text
+    for _, plr in ipairs(Players:GetPlayers()) do ApplyPlayerESP(plr) end
+end)
 
-LookBox.FocusLost:Connect(function()
-    local num = tonumber(LookBox.Text)
-    if num and num > 0 then
-        Settings.LookLength = num
-        UpdateLookPartsSize()
-    else
-        LookBox.Text = tostring(Settings.LookLength)
-    end
+MakeField("Look Length (studs):", "5", 945, function(box)
+    local n = tonumber(box.Text)
+    if n and n > 0 then Settings.LookLength = n UpdateLookPartsSize() else box.Text = tostring(Settings.LookLength) end
 end)
 
 local CloseBtn = Instance.new("TextButton")
@@ -1002,9 +1004,7 @@ CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 14
 CloseBtn.Parent = Main
-
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
-
 CloseBtn.MouseButton1Click:Connect(function()
     if FOVCircle then pcall(function() FOVCircle:Remove() end) end
     ScreenGui:Destroy()
