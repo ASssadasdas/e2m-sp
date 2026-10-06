@@ -24,6 +24,7 @@ local Settings = {
     PlayersLookVector = false,
     BotsESP = false,
     ExitsESP = false,
+    TrapsESP = false,
     Fullbright = false,
     TeammateName = "",
     LookLength = 5,
@@ -36,12 +37,15 @@ local LOOK_COLOR = Color3.fromRGB(0, 80, 255)
 local OUTLINE_COLOR = Color3.fromRGB(255, 0, 0)
 local TEAM_COLOR = Color3.fromRGB(0, 255, 0)
 local EXIT_COLOR = Color3.fromRGB(0, 255, 0)
+local TRAP_COLOR = Color3.fromRGB(255, 50, 50)
 
 local PlayerESP = {}
 local BotESP = {}
 local ExitESP = {}
+local TrapESP = {}
 local BotConnections = {}
 local ExitConnections = {}
+local TrapConnection = nil
 
 local OriginalLighting = {
     Brightness = Lighting.Brightness,
@@ -50,6 +54,11 @@ local OriginalLighting = {
     GlobalShadows = Lighting.GlobalShadows,
     OutdoorAmbient = Lighting.OutdoorAmbient,
     Ambient = Lighting.Ambient,
+}
+
+local TrapKeywords = {
+    "pmn", "pmn2", "mon-50", "mon50", "mon 50",
+    "f1 trap", "f1trap", "landmine", "claymore", "mine"
 }
 
 local function IsAlive(model)
@@ -62,6 +71,17 @@ local function IsTeammate(player)
     if Settings.TeammateName == "" then return false end
     return string.lower(player.Name) == string.lower(Settings.TeammateName)
         or string.lower(player.DisplayName) == string.lower(Settings.TeammateName)
+end
+
+local function IsTrap(obj)
+    if not obj then return false end
+    local name = string.lower(obj.Name)
+    for _, kw in ipairs(TrapKeywords) do
+        if string.find(name, kw, 1, true) then
+            return true
+        end
+    end
+    return false
 end
 
 local function SetFullbright(enabled)
@@ -483,6 +503,75 @@ local function MaintainExits()
     end
 end
 
+local function TryAddTrap(obj)
+    if not Settings.TrapsESP then return end
+    if not IsTrap(obj) then return end
+    if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
+
+    local target = obj
+    if obj:IsA("Model") then
+        target = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+        if not target then target = obj end
+    end
+
+    if not TrapESP[obj] or not TrapESP[obj].Parent then
+        local hl = CreateHighlight(target, TRAP_COLOR)
+        if hl then
+            TrapESP[obj] = hl
+        end
+    end
+end
+
+local function ClearTraps()
+    for obj, hl in pairs(TrapESP) do
+        pcall(function() hl:Destroy() end)
+    end
+    table.clear(TrapESP)
+end
+
+local function ScanTraps()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if IsTrap(obj) then
+            TryAddTrap(obj)
+        end
+    end
+end
+
+local function StartTrapTracking()
+    ClearTraps()
+    task.spawn(ScanTraps)
+
+    if TrapConnection then
+        TrapConnection:Disconnect()
+    end
+    TrapConnection = Workspace.DescendantAdded:Connect(function(obj)
+        if IsTrap(obj) then
+            task.defer(TryAddTrap, obj)
+        end
+    end)
+end
+
+local function StopTrapTracking()
+    if TrapConnection then
+        TrapConnection:Disconnect()
+        TrapConnection = nil
+    end
+    ClearTraps()
+end
+
+local function MaintainTraps()
+    if not Settings.TrapsESP then return end
+
+    for obj, hl in pairs(TrapESP) do
+        if not obj or not obj.Parent or not hl or not hl.Parent then
+            pcall(function() if hl then hl:Destroy() end end)
+            TrapESP[obj] = nil
+        else
+            ForceHighlight(hl, TRAP_COLOR)
+        end
+    end
+end
+
 RunService.Heartbeat:Connect(function()
     if Settings.Fullbright then
         SetFullbright(true)
@@ -540,6 +629,7 @@ RunService.Heartbeat:Connect(function()
 
     MaintainBots()
     MaintainExits()
+    MaintainTraps()
 end)
 
 local function SetupPlayer(player)
@@ -589,8 +679,8 @@ ScreenGui.Parent = CoreGui
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.new(0, 260, 0, 560)
-Main.Position = UDim2.new(0.5, -130, 0.5, -280)
+Main.Size = UDim2.new(0, 260, 0, 600)
+Main.Position = UDim2.new(0.5, -130, 0.5, -300)
 Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -667,17 +757,11 @@ local function CreateToggle(name, flag, yPos)
         UpdateVisual()
 
         if flag == "BotsESP" then
-            if enabled then
-                StartBotTracking()
-            else
-                StopBotTracking()
-            end
+            if enabled then StartBotTracking() else StopBotTracking() end
         elseif flag == "ExitsESP" then
-            if enabled then
-                StartExitTracking()
-            else
-                StopExitTracking()
-            end
+            if enabled then StartExitTracking() else StopExitTracking() end
+        elseif flag == "TrapsESP" then
+            if enabled then StartTrapTracking() else StopTrapTracking() end
         elseif flag == "Fullbright" then
             SetFullbright(enabled)
         else
@@ -697,11 +781,12 @@ CreateToggle("Players Distance", "PlayersDistance", 185)
 CreateToggle("Players Look Vector", "PlayersLookVector", 230)
 CreateToggle("Bots ESP", "BotsESP", 275)
 CreateToggle("Exits ESP", "ExitsESP", 320)
-CreateToggle("Fullbright", "Fullbright", 365)
+CreateToggle("Traps ESP", "TrapsESP", 365)
+CreateToggle("Fullbright", "Fullbright", 410)
 
 local TeamLabel = Instance.new("TextLabel")
 TeamLabel.Size = UDim2.new(1, -20, 0, 18)
-TeamLabel.Position = UDim2.new(0, 10, 0, 408)
+TeamLabel.Position = UDim2.new(0, 10, 0, 452)
 TeamLabel.BackgroundTransparency = 1
 TeamLabel.Text = "Teammate Name:"
 TeamLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
@@ -712,7 +797,7 @@ TeamLabel.Parent = Main
 
 local TeamBox = Instance.new("TextBox")
 TeamBox.Size = UDim2.new(1, -20, 0, 26)
-TeamBox.Position = UDim2.new(0, 10, 0, 426)
+TeamBox.Position = UDim2.new(0, 10, 0, 470)
 TeamBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 TeamBox.BorderSizePixel = 0
 TeamBox.Text = ""
@@ -735,7 +820,7 @@ end)
 
 local LookLabel = Instance.new("TextLabel")
 LookLabel.Size = UDim2.new(1, -20, 0, 18)
-LookLabel.Position = UDim2.new(0, 10, 0, 460)
+LookLabel.Position = UDim2.new(0, 10, 0, 504)
 LookLabel.BackgroundTransparency = 1
 LookLabel.Text = "Look Length (studs):"
 LookLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
@@ -746,7 +831,7 @@ LookLabel.Parent = Main
 
 local LookBox = Instance.new("TextBox")
 LookBox.Size = UDim2.new(1, -20, 0, 26)
-LookBox.Position = UDim2.new(0, 10, 0, 478)
+LookBox.Position = UDim2.new(0, 10, 0, 522)
 LookBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 LookBox.BorderSizePixel = 0
 LookBox.Text = "5"
