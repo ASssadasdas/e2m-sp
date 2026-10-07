@@ -8,6 +8,7 @@ local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 
@@ -33,6 +34,7 @@ local Settings = {
     AimNPCs = false,
     AimRadius = 100,
     AimHead = true,
+    AimYOffset = 0,
     TeammateName = "",
     LookLength = 5,
 }
@@ -45,7 +47,7 @@ local OUTLINE_COLOR = Color3.fromRGB(255, 0, 0)
 local TEAM_COLOR = Color3.fromRGB(0, 255, 0)
 local EXIT_COLOR = Color3.fromRGB(0, 255, 0)
 local TRAP_COLOR = Color3.fromRGB(255, 50, 50)
-local TRACER_COLOR = Color3.fromRGB(255, 200, 50)
+local TRACER_COLOR = Color3.fromRGB(255, 220, 50)
 
 local PlayerESP = {}
 local BotESP = {}
@@ -56,20 +58,23 @@ local CorpseESP = {}
 local BotConnections = {}
 local ExitConnections = {}
 local TrapConnection = nil
-local TracerConnection = nil
-local ActiveTracers = {}
+local TracerAddedConn = nil
+local TrackedBullets = {}
 
 local FOVCircle = nil
 local hasDrawing = pcall(function() return Drawing end) and Drawing ~= nil
 
 local CurrentWeapon = "None"
 local CurrentAmmo = "Default"
-local BulletSpeed = 2600
-local DropMult = 0.7
+local CurrentCaliber = ""
+local BulletSpeed = 700
+local DropMult = 1
+local SpeedSource = "base"
 local LastWeaponScan = 0
+local MeasuredSpeed = nil
+local MeasuredSamples = 0
 
--- Game bullet speed is lower than real m/s×3.5 → scale for prediction
-local SPEED_SCALE = 0.38
+local BALLISTIC_G = 55
 
 local OriginalLighting = {
     Brightness = Lighting.Brightness,
@@ -94,39 +99,39 @@ local BodyParts = {
 }
 
 local WeaponDB = {
-    {"mod-98", 3500, 0.45, "338"}, {"task force zero", 3500, 0.45, "338"},
-    {"r700", 3470, 0.45, "338"}, {"remington", 3470, 0.45, "338"},
-    {"svd", 3100, 0.55, "76254"}, {"mosin", 3100, 0.55, "76254"}, {"pkm", 3100, 0.55, "76254"},
-    {"fn-fal", 3000, 0.60, "76251"}, {"fal", 3000, 0.60, "76251"},
-    {"m4a1", 3400, 0.50, "556"}, {"m4", 3400, 0.50, "556"}, {"adar", 3400, 0.50, "556"},
-    {"akmn", 2600, 0.70, "76239"}, {"akm", 2550, 0.72, "76239"}, {"sks", 2600, 0.70, "76239"},
-    {"as val", 1500, 1.15, "939"}, {"val", 1500, 1.15, "939"},
-    {"groza", 1500, 1.15, "939"}, {"ots-14", 1500, 1.15, "939"},
-    {"mp5", 1700, 1.05, "919"}, {"mp443", 1700, 1.05, "919"}, {"yarygin", 1700, 1.05, "919"},
-    {"mk23", 1750, 1.05, "45"},
-    {"ppsh", 1650, 1.08, "76225"}, {"tt-33", 1650, 1.08, "76225"},
-    {"tokarev", 1650, 1.08, "76225"}, {"nagant", 1650, 1.08, "76225"},
-    {"makarov", 1350, 1.25, "918"}, {"skorpion", 1400, 1.20, "918"}, {"mod-0", 1400, 1.20, "918"},
-    {"saiga", 1500, 1.30, "12ga"}, {"izh-81", 1450, 1.35, "12ga"},
-    {"izh-12", 1450, 1.35, "12ga"}, {"izh", 1450, 1.35, "12ga"}, {"toz", 1450, 1.35, "12ga"},
-    {"rpg", 700, 2.00, "rpg"},
-    {"knife", 9999, 0.00, "melee"}, {"karambit", 9999, 0.00, "melee"},
-    {"machete", 9999, 0.00, "melee"}, {"dv-2", 9999, 0.00, "melee"},
+    {"mod-98", 0.45, "338"}, {"task force zero", 0.45, "338"},
+    {"r700", 0.45, "338"}, {"remington", 0.45, "338"},
+    {"svd", 0.55, "76254"}, {"mosin", 0.55, "76254"}, {"pkm", 0.55, "76254"},
+    {"fn-fal", 0.60, "76251"}, {"fal", 0.60, "76251"},
+    {"m4a1", 0.50, "556"}, {"m4", 0.50, "556"}, {"adar", 0.50, "556"},
+    {"akmn", 0.70, "76239"}, {"akm", 0.72, "76239"}, {"sks", 0.70, "76239"},
+    {"as val", 1.15, "939"}, {"val", 1.15, "939"},
+    {"groza", 1.15, "939"}, {"ots-14", 1.15, "939"},
+    {"mp5", 1.05, "919"}, {"mp443", 1.05, "919"}, {"yarygin", 1.05, "919"},
+    {"mk23", 1.05, "45"},
+    {"ppsh", 1.08, "76225"}, {"tt-33", 1.08, "76225"},
+    {"tokarev", 1.08, "76225"}, {"nagant", 1.08, "76225"},
+    {"makarov", 1.25, "918"}, {"skorpion", 1.20, "918"}, {"mod-0", 1.20, "918"},
+    {"saiga", 1.30, "12ga"}, {"izh-81", 1.35, "12ga"},
+    {"izh-12", 1.35, "12ga"}, {"izh", 1.35, "12ga"}, {"toz", 1.35, "12ga"},
+    {"rpg", 2.00, "rpg"},
+    {"knife", 0, "melee"}, {"karambit", 0, "melee"},
+    {"machete", 0, "melee"}, {"dv-2", 0, "melee"},
 }
 
-local AmmoVel = {
-    ["338"] = {tracer = 3470, ap = 3550, tfz = 3550},
-    ["76254"] = {tracer = 3100, ap = 3290, tfz = 3290},
-    ["76251"] = {tracer = 2870, ap = 3150, tfz = 3150},
-    ["556"] = {tracer = 3265, ap = 3500, tfz = 3500},
-    ["76239"] = {tracer = 2500, ap = 2685, tfz = 2685},
-    ["939"] = {tracer = 1485, ap = 1485, tfz = 1575},
-    ["919"] = {tracer = 1630, ap = 1750, tfz = 1750},
-    ["45"] = {tracer = 1630, ap = 1800, tfz = 1800},
-    ["76225"] = {tracer = 1610, ap = 1695, tfz = 1695},
-    ["918"] = {tracer = 1255, ap = 1340, tfz = 1415},
-    ["12ga"] = {tracer = 1490, ap = 1490, buckshot = 1490, slug = 1420, flechette = 1190, ["ap-20"] = 2190},
-    ["rpg"] = {tracer = 700, ap = 700, tfz = 700},
+local WikiVelocity = {
+    ["918"] = {tracer = 359, ap = 383, tfz = 404},
+    ["919"] = {tracer = 465, ap = 500, tfz = 500},
+    ["76225"] = {tracer = 460, ap = 484, tfz = 484},
+    ["45"] = {tracer = 465, ap = 515, tfz = 515},
+    ["76239"] = {tracer = 715, ap = 767, tfz = 767},
+    ["76254"] = {tracer = 885, ap = 940, tfz = 940},
+    ["76251"] = {tracer = 820, ap = 900, tfz = 900},
+    ["556"] = {tracer = 933, ap = 1000, tfz = 1000},
+    ["939"] = {tracer = 357, ap = 357, tfz = 450},
+    ["338"] = {tracer = 992, ap = 1015, tfz = 1015},
+    ["12ga"] = {tracer = 425, ap = 425, buckshot = 425, slug = 405, flechette = 340, ["ap-20"] = 625},
+    ["rpg"] = {tracer = 200, ap = 200, tfz = 200},
     ["melee"] = {tracer = 9999, ap = 9999, tfz = 9999},
 }
 
@@ -168,96 +173,216 @@ local function MatchWeapon(name)
     local lower = string.lower(name)
     for _, entry in ipairs(WeaponDB) do
         if string.find(lower, entry[1], 1, true) then
-            return name, entry[2], entry[3], entry[4]
+            return name, entry[2], entry[3]
         end
     end
     return nil
 end
 
-local function DetectAmmoType(obj, caliberKey)
-    local ammoType, ammoName = "tracer", "Tracer"
-    local function checkStr(s)
-        if not s then return end
-        local l = string.lower(tostring(s))
-        if string.find(l, "tfz", 1, true) or string.find(l, "cqb", 1, true) then
-            ammoType, ammoName = "tfz", "TFZ"
-        elseif string.find(l, "armor", 1, true) or string.find(l, "piercing", 1, true) or l == "ap" or string.find(l, "ap-", 1, true) then
-            ammoType, ammoName = "ap", "AP"
-        elseif string.find(l, "flechette", 1, true) then
-            ammoType, ammoName = "flechette", "Flechette"
-        elseif string.find(l, "slug", 1, true) then
-            ammoType, ammoName = "slug", "Slug"
-        elseif string.find(l, "buck", 1, true) then
-            ammoType, ammoName = "buckshot", "Buckshot"
-        elseif string.find(l, "ap-20", 1, true) or string.find(l, "ap20", 1, true) then
-            ammoType, ammoName = "ap-20", "AP-20"
-        elseif string.find(l, "tracer", 1, true) then
-            ammoType, ammoName = "tracer", "Tracer"
+local function ClassifyAmmoString(s)
+    if not s then return nil end
+    local l = string.lower(tostring(s))
+    if string.find(l, "tfz", 1, true) or string.find(l, "cqb", 1, true) then return "tfz", "TFZ" end
+    if string.find(l, "flechette", 1, true) then return "flechette", "Flechette" end
+    if string.find(l, "ap-20", 1, true) or string.find(l, "ap20", 1, true) then return "ap-20", "AP-20" end
+    if string.find(l, "slug", 1, true) then return "slug", "Slug" end
+    if string.find(l, "buck", 1, true) then return "buckshot", "Buckshot" end
+    if string.find(l, "armor", 1, true) or string.find(l, "piercing", 1, true)
+        or string.find(l, "ap ", 1, true) or string.find(l, " ap", 1, true)
+        or l == "ap" or string.find(l, "_ap", 1, true) then
+        return "ap", "AP"
+    end
+    if string.find(l, "tracer", 1, true) then return "tracer", "Tracer" end
+    return nil
+end
+
+local AmmoTypesFolder = nil
+local function FindAmmoTypes()
+    if AmmoTypesFolder and AmmoTypesFolder.Parent then return AmmoTypesFolder end
+    for _, root in ipairs({ReplicatedStorage, game:GetService("ReplicatedFirst"), Workspace}) do
+        local found = root:FindFirstChild("AmmoTypes", true)
+        if found then
+            AmmoTypesFolder = found
+            return found
         end
     end
-    if obj then
-        local props = obj:FindFirstChild("ItemProperties")
-        if props then
-            for _, key in ipairs({"Ammo", "AmmoType", "Cartridge", "Bullet", "Round", "Caliber", "LoadedAmmo", "CurrentAmmo"}) do
-                checkStr(props:GetAttribute(key))
-            end
+    return nil
+end
+
+local function ReadMuzzleVelocityFromGame(searchName)
+    local folder = FindAmmoTypes()
+    if not folder or not searchName then return nil end
+    local node = folder:FindFirstChild(searchName)
+    if node then
+        local v = node:GetAttribute("MuzzleVelocity")
+        if typeof(v) == "number" and v > 10 then return v end
+    end
+    local lower = string.lower(tostring(searchName))
+    for _, child in ipairs(folder:GetChildren()) do
+        local n = string.lower(child.Name)
+        if string.find(n, lower, 1, true) or string.find(lower, n, 1, true) then
+            local v = child:GetAttribute("MuzzleVelocity")
+            if typeof(v) == "number" and v > 10 then return v end
         end
-        checkStr(obj:GetAttribute("Ammo"))
-        checkStr(obj:GetAttribute("AmmoType"))
-        for _, desc in ipairs(obj:GetDescendants()) do
-            local n = string.lower(desc.Name)
-            if string.find(n, "ammo", 1, true) or string.find(n, "mag", 1, true) or string.find(n, "round", 1, true) then
-                checkStr(desc.Name)
-                if desc:IsA("StringValue") then checkStr(desc.Value) end
-                local p = desc:FindFirstChild("ItemProperties")
-                if p then
-                    checkStr(p:GetAttribute("CallSign"))
-                    checkStr(p:GetAttribute("Name"))
+    end
+    return nil
+end
+
+local function ResolveBulletSpeed(caliberKey, ammoType, detectedAmmoName)
+    if MeasuredSpeed and MeasuredSamples >= 3 then
+        SpeedSource = "LIVE"
+        return math.clamp(MeasuredSpeed, 80, 3000)
+    end
+    if detectedAmmoName then
+        local v = ReadMuzzleVelocityFromGame(detectedAmmoName)
+        if v then
+            SpeedSource = "game"
+            return v
+        end
+    end
+    local folder = FindAmmoTypes()
+    if folder and caliberKey then
+        for _, child in ipairs(folder:GetChildren()) do
+            local n = string.lower(child.Name)
+            local matchCal = string.find(n, string.lower(caliberKey), 1, true)
+                or (caliberKey == "556" and (string.find(n, "5.56", 1, true) or string.find(n, "556", 1, true)))
+                or (caliberKey == "76239" and string.find(n, "7.62x39", 1, true))
+                or (caliberKey == "76254" and string.find(n, "7.62x54", 1, true))
+                or (caliberKey == "76251" and string.find(n, "7.62x51", 1, true))
+                or (caliberKey == "338" and string.find(n, "338", 1, true))
+                or (caliberKey == "918" and string.find(n, "9x18", 1, true))
+                or (caliberKey == "919" and string.find(n, "9x19", 1, true))
+                or (caliberKey == "939" and string.find(n, "9x39", 1, true))
+                or (caliberKey == "12ga" and (string.find(n, "12ga", 1, true) or string.find(n, "12 ga", 1, true)))
+            if matchCal then
+                local isAP = string.find(n, "ap", 1, true) or string.find(n, "armor", 1, true)
+                local isTFZ = string.find(n, "tfz", 1, true) or string.find(n, "cqb", 1, true)
+                local isTracer = string.find(n, "tracer", 1, true)
+                local want = ammoType or "tracer"
+                local ok = (want == "ap" and isAP)
+                    or (want == "tfz" and isTFZ)
+                    or (want == "tracer" and isTracer)
+                    or (want == "slug" and string.find(n, "slug", 1, true))
+                    or (want == "flechette" and string.find(n, "flechette", 1, true))
+                    or (want == "ap-20" and string.find(n, "ap-20", 1, true))
+                    or (want == "buckshot" and string.find(n, "buck", 1, true))
+                if ok then
+                    local v = child:GetAttribute("MuzzleVelocity")
+                    if typeof(v) == "number" and v > 10 then
+                        SpeedSource = "game"
+                        return v
+                    end
                 end
             end
         end
     end
-    local tbl = AmmoVel[caliberKey]
-    local speed = BulletSpeed
-    if tbl then speed = tbl[ammoType] or tbl.tracer or BulletSpeed end
-    return ammoName, speed
+    local w = WikiVelocity[caliberKey or ""]
+    if w then
+        SpeedSource = "wiki"
+        return w[ammoType or "tracer"] or w.tracer or 700
+    end
+    SpeedSource = "base"
+    return 700
+end
+
+local function DetectAmmoOnObject(obj)
+    local ammoType, ammoName, found = "tracer", "Tracer", false
+    local detectedName = nil
+    local function try(s)
+        if not s then return false end
+        local t, n = ClassifyAmmoString(s)
+        if t then
+            ammoType, ammoName, found = t, n, true
+            detectedName = tostring(s)
+            return true
+        end
+        return false
+    end
+    if obj then
+        local props = obj:FindFirstChild("ItemProperties")
+        if props then
+            for _, key in ipairs({
+                "Ammo", "AmmoType", "AmmoName", "Cartridge", "Bullet", "Round",
+                "Caliber", "LoadedAmmo", "CurrentAmmo", "Chambered", "ActiveAmmo",
+                "CallSign", "Name", "Type"
+            }) do
+                if try(props:GetAttribute(key)) then break end
+            end
+            if not found then
+                for attr, val in pairs(props:GetAttributes()) do
+                    if try(val) then break end
+                    if try(attr) then break end
+                end
+            end
+        end
+        if not found then
+            try(obj:GetAttribute("Ammo"))
+            try(obj:GetAttribute("AmmoType"))
+            try(GetCallSign(obj))
+        end
+        if not found then
+            for _, desc in ipairs(obj:GetDescendants()) do
+                local n = string.lower(desc.Name)
+                if string.find(n, "ammo", 1, true) or string.find(n, "mag", 1, true)
+                    or string.find(n, "round", 1, true) or string.find(n, "bullet", 1, true) then
+                    if try(desc.Name) then break end
+                    if desc:IsA("StringValue") and try(desc.Value) then break end
+                    local p = desc:FindFirstChild("ItemProperties")
+                    if p then
+                        if try(p:GetAttribute("CallSign")) then break end
+                        if try(p:GetAttribute("Name")) then break end
+                        if try(p:GetAttribute("AmmoType")) then break end
+                    end
+                end
+            end
+        end
+    end
+    return ammoType, ammoName, found, detectedName
 end
 
 local function DetectLocalWeapon()
     local char = LocalPlayer.Character
     if not char then
-        CurrentWeapon, CurrentAmmo, BulletSpeed, DropMult = "None", "Default", 2600, 0.7
+        CurrentWeapon, CurrentAmmo, CurrentCaliber = "None", "Default", ""
+        BulletSpeed, DropMult, SpeedSource = 700, 1, "base"
         return
     end
-    local function apply(name, spd, drop, cal, obj)
-        CurrentWeapon, DropMult = name, drop
-        local ammoName, ammoSpd = DetectAmmoType(obj, cal)
-        CurrentAmmo, BulletSpeed = ammoName, ammoSpd or spd
+
+    local function apply(name, drop, cal, obj)
+        CurrentWeapon = name
+        DropMult = drop
+        CurrentCaliber = cal
+        local ammoType, ammoName, found, detectedName = DetectAmmoOnObject(obj)
+        CurrentAmmo = found and ammoName or ("?/" .. ammoName)
+        BulletSpeed = ResolveBulletSpeed(cal, ammoType, detectedName or ammoName)
     end
+
     local tool = char:FindFirstChildOfClass("Tool")
     if tool then
-        local m, s, d, c = MatchWeapon(GetCallSign(tool) or tool.Name)
-        if m then apply(m, s, d, c, tool) return end
+        local m, d, c = MatchWeapon(GetCallSign(tool) or tool.Name)
+        if m then apply(m, d, c, tool) return end
     end
+
     for _, child in ipairs(char:GetChildren()) do
-        if child:IsA("Model") or child:IsA("Tool") then
-            if string.find(string.lower(child.Name), "clothing", 1, true) then continue end
-            local m, s, d, c = MatchWeapon(GetCallSign(child))
-            if m then apply(m, s, d, c, child) return end
+        if (child:IsA("Model") or child:IsA("Tool")) and not string.find(string.lower(child.Name), "clothing", 1, true) then
+            local m, d, c = MatchWeapon(GetCallSign(child))
+            if m then apply(m, d, c, child) return end
         end
     end
+
     for _, child in ipairs(Camera:GetChildren()) do
         if child:IsA("Model") then
-            local m, s, d, c = MatchWeapon(GetCallSign(child) or child.Name)
-            if m then apply(m, s, d, c, child) return end
+            local m, d, c = MatchWeapon(GetCallSign(child) or child.Name)
+            if m then apply(m, d, c, child) return end
             for _, sub in ipairs(child:GetChildren()) do
                 if sub:IsA("Model") then
-                    m, s, d, c = MatchWeapon(GetCallSign(sub) or sub.Name)
-                    if m then apply(m, s, d, c, sub) return end
+                    m, d, c = MatchWeapon(GetCallSign(sub) or sub.Name)
+                    if m then apply(m, d, c, sub) return end
                 end
             end
         end
     end
+
     for _, handName in ipairs({"RightHand", "LeftHand", "Right Arm", "Left Arm"}) do
         local hand = char:FindFirstChild(handName)
         if not hand then continue end
@@ -267,14 +392,25 @@ local function DetectLocalWeapon()
                 if other and other.Parent then
                     local model = other:FindFirstAncestorWhichIsA("Model")
                     if model and model ~= char then
-                        local m, s, d, c = MatchWeapon(GetCallSign(model) or model.Name)
-                        if m then apply(m, s, d, c, model) return end
+                        local m, d, c = MatchWeapon(GetCallSign(model) or model.Name)
+                        if m then apply(m, d, c, model) return end
                     end
                 end
             end
         end
     end
-    CurrentWeapon, CurrentAmmo, BulletSpeed, DropMult = "Unknown", "Default", 2600, 0.7
+
+    CurrentWeapon, CurrentAmmo, CurrentCaliber = "Unknown", "Default", ""
+    if MeasuredSpeed and MeasuredSamples >= 3 then
+        BulletSpeed, SpeedSource = MeasuredSpeed, "LIVE"
+    else
+        BulletSpeed, SpeedSource = 700, "base"
+    end
+    DropMult = 1
+end
+
+local function GetEffectiveSpeed()
+    return math.clamp(BulletSpeed, 80, 3000)
 end
 
 local function SetFullbright(enabled)
@@ -345,57 +481,41 @@ local function GetPredictedPosition(part, model)
     local camPos = Camera.CFrame.Position
     local pos = part.Position
     local dist = (pos - camPos).Magnitude
-    if dist < 0.1 then return pos end
+    if dist < 0.05 then return pos end
 
     local heightDiff = pos.Y - camPos.Y
-    local targetVel = GetVelocity(model)
-    local myVel = GetMyVelocity()
-    local relVel = targetVel - myVel
+    local relVel = GetVelocity(model) - GetMyVelocity()
+    local speed = GetEffectiveSpeed()
+    local t = dist / speed
 
-    -- Scale wiki speed down to match in-game ballistics
-    local speed = math.clamp(BulletSpeed * SPEED_SCALE, 200, 2500)
-    local flightTime = dist / speed
-
-    local r = math.clamp((dist - 8) / 90, 0, 1)
-    r = r * r * (3 - 2 * r)
-
-    local maxLead = 0.10 + r * 0.22
-    local leadT = math.min(flightTime * r, maxLead)
-
+    local leadBlend = math.clamp((dist - 18) / 55, 0, 1)
+    leadBlend = leadBlend * leadBlend
     local hRel = Vector3.new(relVel.X, 0, relVel.Z)
-    local vRel = relVel.Y
-    local speedDamp = 1 / (1 + hRel.Magnitude / 28)
+    local damp = 1 / (1 + hRel.Magnitude / 32)
+    local leadT = math.min(t * leadBlend, 0.20) * damp
+    local lateral = hRel * leadT * 0.82
+    local vertical = relVel.Y * leadT * 0.12
 
-    local lateralLead = hRel * (leadT * speedDamp * 0.72)
-    local verticalLead = vRel * (leadT * 0.12)
+    local g = BALLISTIC_G * DropMult
+    local drop = 0.5 * g * t * t
 
-    local heightComp = 0
-    if math.abs(heightDiff) > 3 then
-        heightComp = heightDiff * 0.015 * r
+    if dist < 45 then
+        local f = dist / 45
+        drop = drop * (f * f)
+    elseif dist < 90 then
+        drop = drop * (0.4 + 0.6 * ((dist - 45) / 45))
     end
 
-    -- Stronger drop so bullets reach at long range (aim higher)
-    local drop = (flightTime * flightTime) * 95 * DropMult * r
-
-    if dist > 80 then
-        drop = drop + (dist - 80) * 0.028 * DropMult
-    end
-    if dist > 150 then
-        drop = drop + (dist - 150) * 0.04 * DropMult
-    end
-    if dist > 250 then
-        drop = drop + (dist - 250) * 0.05 * DropMult
+    if heightDiff > 15 then
+        drop = drop + (heightDiff - 15) * 0.01
+    elseif heightDiff < -15 then
+        drop = math.max(0, drop + (heightDiff + 15) * 0.008)
     end
 
-    if heightDiff > 8 then
-        drop = drop + heightDiff * 0.025 * r
-    elseif heightDiff < -8 then
-        drop = drop * (1 - math.clamp((-heightDiff) / 100, 0, 0.3))
-    end
+    drop = math.clamp(drop, 0, 10)
+    local manual = Settings.AimYOffset or 0
 
-    drop = math.clamp(drop, 0, 12)
-
-    return pos + lateralLead + Vector3.new(0, verticalLead + heightComp + drop, 0)
+    return pos + lateral + Vector3.new(0, vertical + drop + manual, 0)
 end
 
 local function IsPartInFOV(part, center, radius)
@@ -675,17 +795,11 @@ local function ApplyPlayerESP(player)
     end
 end
 
--- Corpses (dead models not tied to living players)
 local function TryAddCorpse(model)
     if not Settings.PlayersESP then return end
-    if not model or not model:IsA("Model") then return end
-    if model == LocalPlayer.Character then return end
+    if not model or not model:IsA("Model") or model == LocalPlayer.Character then return end
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health > 0 then return end
-    -- skip if this is a living player's character (handled by PlayerESP)
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr.Character == model and IsAlive(model) then return end
-    end
     if not CorpseESP[model] or not CorpseESP[model].Parent then
         local hl = CreateHighlight(model, DEAD_COLOR)
         if hl then CorpseESP[model] = hl end
@@ -708,7 +822,6 @@ local function MaintainCorpses()
             ForceHighlight(hl, DEAD_COLOR)
         end
     end
-    -- scan common corpse locations + dead player characters
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer and plr.Character and not IsAlive(plr.Character) then
             TryAddCorpse(plr.Character)
@@ -911,85 +1024,153 @@ local function MaintainTraps()
     end
 end
 
--- Bullet Tracers
-local BulletNameHints = {"bullet", "projectile", "tracer", "round", "pellet", "slug", "shell", "ammo"}
+local function GetBulletPart(obj)
+    if obj:IsA("BasePart") then return obj end
+    if obj:IsA("Model") then
+        return obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+    end
+    return nil
+end
 
-local function IsBulletObject(obj)
+local function LooksLikeBullet(obj)
     if not obj then return false end
-    if obj:IsA("BasePart") then
-        local n = string.lower(obj.Name)
-        for _, h in ipairs(BulletNameHints) do
-            if string.find(n, h, 1, true) then return true end
-        end
-        -- small fast part
-        if obj.Size.Magnitude < 4 then
-            local sp = obj.AssemblyLinearVelocity.Magnitude
-            if sp > 80 then return true end
-        end
-    elseif obj:IsA("Model") then
-        local n = string.lower(obj.Name)
-        for _, h in ipairs(BulletNameHints) do
-            if string.find(n, h, 1, true) then return true end
-        end
-    elseif obj:IsA("Beam") or obj:IsA("Trail") then
-        local n = string.lower(obj.Name)
-        for _, h in ipairs(BulletNameHints) do
-            if string.find(n, h, 1, true) then return true end
+    local n = string.lower(obj.Name)
+    for _, h in ipairs({"bullet", "projectile", "tracer", "round", "pellet", "slug", "shell", "ammo"}) do
+        if string.find(n, h, 1, true) then return true end
+    end
+    local part = GetBulletPart(obj)
+    if part then
+        local dist = (part.Position - Camera.CFrame.Position).Magnitude
+        local spd = part.AssemblyLinearVelocity.Magnitude
+        if dist < 40 and spd > 50 and part.Size.Magnitude < 6 then
+            return true
         end
     end
     return false
 end
 
-local function AttachTracer(obj)
-    if not Settings.BulletTracers then return end
-    if ActiveTracers[obj] then return end
+local function DrawPathSegment(from, to, folder)
+    local dist = (to - from).Magnitude
+    if dist < 0.4 then return end
+    local seg = Instance.new("Part")
+    seg.Name = "XenoPathSeg"
+    seg.Anchored = true
+    seg.CanCollide = false
+    seg.CanQuery = false
+    seg.CanTouch = false
+    seg.CastShadow = false
+    seg.Material = Enum.Material.Neon
+    seg.Color = TRACER_COLOR
+    seg.Transparency = 0.2
+    seg.Size = Vector3.new(0.07, 0.07, dist)
+    seg.CFrame = CFrame.lookAt(from:Lerp(to, 0.5), to)
+    seg.Parent = folder
+end
 
-    local target = obj
-    if obj:IsA("Model") then
-        target = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-        if not target then return end
-    end
-    if not target:IsA("BasePart") and not target:IsA("Beam") and not target:IsA("Trail") then
-        return
-    end
+local function TrackBulletPath(obj)
+    if TrackedBullets[obj] then return end
+    local part = GetBulletPart(obj)
+    if not part then return end
 
-    local hl = Instance.new("Highlight")
-    hl.Name = "XenoBulletTracer"
-    hl.Adornee = obj:IsA("Model") and obj or target
-    hl.FillColor = TRACER_COLOR
-    hl.OutlineColor = Color3.fromRGB(255, 255, 100)
-    hl.FillTransparency = 0.35
-    hl.OutlineTransparency = 0.2
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Parent = obj:IsA("Model") and obj or target
+    TrackedBullets[obj] = true
+    local folder = Instance.new("Folder")
+    folder.Name = "XenoBulletPath"
+    folder.Parent = Workspace
 
-    ActiveTracers[obj] = hl
+    local lastPos = part.Position
+    local lastTime = tick()
+    local startTime = tick()
+    local samples = {}
+    local conn
 
-    task.delay(3, function()
-        pcall(function() if hl then hl:Destroy() end end)
-        ActiveTracers[obj] = nil
+    conn = RunService.Heartbeat:Connect(function()
+        local now = tick()
+        if now - startTime > 3 or not part.Parent then
+            conn:Disconnect()
+            TrackedBullets[obj] = nil
+            task.delay(math.max(0, 3 - (now - startTime)), function()
+                pcall(function() folder:Destroy() end)
+            end)
+            return
+        end
+        local pos = part.Position
+        local dt = now - lastTime
+        local moved = (pos - lastPos).Magnitude
+        if dt > 0.015 and moved > 0.5 then
+            local spd = moved / dt
+            if spd > 60 and spd < 5000 then
+                table.insert(samples, spd)
+                if #samples >= 3 then
+                    local sum, n = 0, 0
+                    for i = math.max(1, #samples - 4), #samples do
+                        sum = sum + samples[i]
+                        n = n + 1
+                    end
+                    local avg = sum / n
+                    if not MeasuredSpeed then
+                        MeasuredSpeed = avg
+                    else
+                        MeasuredSpeed = MeasuredSpeed * 0.65 + avg * 0.35
+                    end
+                    MeasuredSamples = MeasuredSamples + 1
+                    BulletSpeed = MeasuredSpeed
+                    SpeedSource = "LIVE"
+                end
+            end
+            DrawPathSegment(lastPos, pos, folder)
+            lastPos = pos
+            lastTime = now
+        end
+    end)
+
+    task.delay(3.1, function()
+        pcall(function() conn:Disconnect() end)
+        TrackedBullets[obj] = nil
+        pcall(function() folder:Destroy() end)
     end)
 end
 
 local function StartTracers()
-    if TracerConnection then TracerConnection:Disconnect() end
-    TracerConnection = Workspace.DescendantAdded:Connect(function(obj)
+    if TracerAddedConn then TracerAddedConn:Disconnect() end
+    TracerAddedConn = Workspace.DescendantAdded:Connect(function(obj)
         if not Settings.BulletTracers then return end
         task.defer(function()
-            if IsBulletObject(obj) then
-                AttachTracer(obj)
-            end
+            if LooksLikeBullet(obj) then TrackBulletPath(obj) end
         end)
     end)
 end
 
 local function StopTracers()
-    if TracerConnection then TracerConnection:Disconnect() TracerConnection = nil end
-    for obj, hl in pairs(ActiveTracers) do
-        pcall(function() hl:Destroy() end)
+    if TracerAddedConn then TracerAddedConn:Disconnect() TracerAddedConn = nil end
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj.Name == "XenoBulletPath" then pcall(function() obj:Destroy() end) end
     end
-    table.clear(ActiveTracers)
+    table.clear(TrackedBullets)
 end
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if not Settings.BulletTracers then return end
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+    local t0 = tick()
+    local scanConn
+    scanConn = Workspace.DescendantAdded:Connect(function(obj)
+        if tick() - t0 > 0.35 then
+            scanConn:Disconnect()
+            return
+        end
+        task.defer(function()
+            local part = GetBulletPart(obj)
+            if not part then return end
+            local dist = (part.Position - Camera.CFrame.Position).Magnitude
+            local spd = part.AssemblyLinearVelocity.Magnitude
+            if dist < 50 and (spd > 40 or LooksLikeBullet(obj)) then
+                TrackBulletPath(obj)
+            end
+        end)
+    end)
+    task.delay(0.35, function() pcall(function() scanConn:Disconnect() end) end)
+end)
 
 CreateFOVCircle()
 local WeaponLabel = nil
@@ -1001,7 +1182,7 @@ RunService.RenderStepped:Connect(function()
         LastWeaponScan = now
         DetectLocalWeapon()
         if WeaponLabel then
-            WeaponLabel.Text = string.format("%s | %s | %d", CurrentWeapon, CurrentAmmo, math.floor(BulletSpeed))
+            WeaponLabel.Text = string.format("%s | %s | %d (%s)", CurrentWeapon, CurrentAmmo, math.floor(BulletSpeed), SpeedSource)
         end
     end
     if Settings.AutoAim and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
@@ -1014,7 +1195,6 @@ end)
 
 RunService.Heartbeat:Connect(function()
     if Settings.Fullbright then SetFullbright(true) end
-
     if LocalPlayer.Character then
         local myHl = LocalPlayer.Character:FindFirstChild("XenoESP_Highlight")
         if myHl then pcall(function() myHl:Destroy() end) end
@@ -1023,7 +1203,6 @@ RunService.Heartbeat:Connect(function()
             BotESP[LocalPlayer.Character] = nil
         end
     end
-
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
             local character = player.Character
@@ -1057,7 +1236,6 @@ RunService.Heartbeat:Connect(function()
             end
         end
     end
-
     MaintainBots()
     MaintainExits()
     MaintainTraps()
@@ -1096,8 +1274,8 @@ ScreenGui.Parent = CoreGui
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.new(0, 270, 0, 920)
-Main.Position = UDim2.new(0.5, -135, 0.5, -460)
+Main.Size = UDim2.new(0, 270, 0, 970)
+Main.Position = UDim2.new(0.5, -135, 0.5, -485)
 Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -1221,7 +1399,7 @@ WeaponLabel.Size = UDim2.new(1, -20, 0, 40)
 WeaponLabel.Position = UDim2.new(0, 10, 0, 695)
 WeaponLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 WeaponLabel.BorderSizePixel = 0
-WeaponLabel.Text = "None | Default | 2600"
+WeaponLabel.Text = "None | Default | 700 (base)"
 WeaponLabel.TextColor3 = Color3.fromRGB(0, 220, 140)
 WeaponLabel.Font = Enum.Font.GothamBold
 WeaponLabel.TextSize = 11
@@ -1263,12 +1441,17 @@ MakeField("Aim Radius (min 5):", "100", 745, function(box)
     if n and n >= 5 then Settings.AimRadius = n UpdateFOVCircle() else box.Text = tostring(Settings.AimRadius) end
 end)
 
-MakeField("Teammate Name:", "", 795, function(box)
+MakeField("Y Offset (+ up / - down):", "0", 795, function(box)
+    local n = tonumber(box.Text)
+    if n then Settings.AimYOffset = n else box.Text = tostring(Settings.AimYOffset) end
+end)
+
+MakeField("Teammate Name:", "", 845, function(box)
     Settings.TeammateName = box.Text
     for _, plr in ipairs(Players:GetPlayers()) do ApplyPlayerESP(plr) end
 end)
 
-MakeField("Look Length (studs):", "5", 845, function(box)
+MakeField("Look Length (studs):", "5", 895, function(box)
     local n = tonumber(box.Text)
     if n and n > 0 then Settings.LookLength = n UpdateLookPartsSize() else box.Text = tostring(Settings.LookLength) end
 end)
