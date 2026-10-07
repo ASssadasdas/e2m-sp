@@ -85,51 +85,27 @@ local BodyParts = {
     "Left Arm", "Right Arm", "Left Leg", "Right Leg",
 }
 
--- Wiki m/s × 3.5 ≈ studs/s | {pattern, defaultSpeed, dropMult, caliberKey}
 local WeaponDB = {
-    {"mod-98",          3500, 0.45, "338"},
-    {"task force zero", 3500, 0.45, "338"},
-    {"r700",            3470, 0.45, "338"},
-    {"remington",       3470, 0.45, "338"},
-    {"svd",             3100, 0.55, "76254"},
-    {"mosin",           3100, 0.55, "76254"},
-    {"pkm",             3100, 0.55, "76254"},
-    {"fn-fal",          3000, 0.60, "76251"},
-    {"fal",             3000, 0.60, "76251"},
-    {"m4a1",            3400, 0.50, "556"},
-    {"m4",              3400, 0.50, "556"},
-    {"adar",            3400, 0.50, "556"},
-    {"akmn",            2600, 0.70, "76239"},
-    {"akm",             2550, 0.72, "76239"},
-    {"sks",             2600, 0.70, "76239"},
-    {"as val",          1500, 1.15, "939"},
-    {"val",             1500, 1.15, "939"},
-    {"groza",           1500, 1.15, "939"},
-    {"ots-14",          1500, 1.15, "939"},
-    {"mp5",             1700, 1.05, "919"},
-    {"mp443",           1700, 1.05, "919"},
-    {"yarygin",         1700, 1.05, "919"},
-    {"mk23",            1750, 1.05, "45"},
-    {"ppsh",            1650, 1.08, "76225"},
-    {"tt-33",           1650, 1.08, "76225"},
-    {"tokarev",         1650, 1.08, "76225"},
-    {"nagant",          1650, 1.08, "76225"},
-    {"makarov",         1350, 1.25, "918"},
-    {"skorpion",        1400, 1.20, "918"},
-    {"mod-0",           1400, 1.20, "918"},
-    {"saiga",           1500, 1.30, "12ga"},
-    {"izh-81",          1450, 1.35, "12ga"},
-    {"izh-12",          1450, 1.35, "12ga"},
-    {"izh",             1450, 1.35, "12ga"},
-    {"toz",             1450, 1.35, "12ga"},
-    {"rpg",              700, 2.00, "rpg"},
-    {"knife",           9999, 0.00, "melee"},
-    {"karambit",        9999, 0.00, "melee"},
-    {"machete",         9999, 0.00, "melee"},
-    {"dv-2",            9999, 0.00, "melee"},
+    {"mod-98", 3500, 0.45, "338"}, {"task force zero", 3500, 0.45, "338"},
+    {"r700", 3470, 0.45, "338"}, {"remington", 3470, 0.45, "338"},
+    {"svd", 3100, 0.55, "76254"}, {"mosin", 3100, 0.55, "76254"}, {"pkm", 3100, 0.55, "76254"},
+    {"fn-fal", 3000, 0.60, "76251"}, {"fal", 3000, 0.60, "76251"},
+    {"m4a1", 3400, 0.50, "556"}, {"m4", 3400, 0.50, "556"}, {"adar", 3400, 0.50, "556"},
+    {"akmn", 2600, 0.70, "76239"}, {"akm", 2550, 0.72, "76239"}, {"sks", 2600, 0.70, "76239"},
+    {"as val", 1500, 1.15, "939"}, {"val", 1500, 1.15, "939"},
+    {"groza", 1500, 1.15, "939"}, {"ots-14", 1500, 1.15, "939"},
+    {"mp5", 1700, 1.05, "919"}, {"mp443", 1700, 1.05, "919"}, {"yarygin", 1700, 1.05, "919"},
+    {"mk23", 1750, 1.05, "45"},
+    {"ppsh", 1650, 1.08, "76225"}, {"tt-33", 1650, 1.08, "76225"},
+    {"tokarev", 1650, 1.08, "76225"}, {"nagant", 1650, 1.08, "76225"},
+    {"makarov", 1350, 1.25, "918"}, {"skorpion", 1400, 1.20, "918"}, {"mod-0", 1400, 1.20, "918"},
+    {"saiga", 1500, 1.30, "12ga"}, {"izh-81", 1450, 1.35, "12ga"},
+    {"izh-12", 1450, 1.35, "12ga"}, {"izh", 1450, 1.35, "12ga"}, {"toz", 1450, 1.35, "12ga"},
+    {"rpg", 700, 2.00, "rpg"},
+    {"knife", 9999, 0.00, "melee"}, {"karambit", 9999, 0.00, "melee"},
+    {"machete", 9999, 0.00, "melee"}, {"dv-2", 9999, 0.00, "melee"},
 }
 
--- Wiki ammo velocities (m/s × 3.5) by caliber + type
 local AmmoVel = {
     ["338"] = {tracer = 3470, ap = 3550, tfz = 3550},
     ["76254"] = {tracer = 3100, ap = 3290, tfz = 3290},
@@ -191,55 +167,38 @@ local function MatchWeapon(name)
 end
 
 local function DetectAmmoType(obj, caliberKey)
-    local ammoType = "tracer"
-    local ammoName = "Tracer"
+    local ammoType, ammoName = "tracer", "Tracer"
 
     local function checkStr(s)
         if not s then return end
         local l = string.lower(tostring(s))
         if string.find(l, "tfz", 1, true) or string.find(l, "cqb", 1, true) then
-            ammoType = "tfz"
-            ammoName = "TFZ"
-        elseif string.find(l, "armor", 1, true) or string.find(l, "ap", 1, true) or string.find(l, "piercing", 1, true) then
-            ammoType = "ap"
-            ammoName = "AP"
+            ammoType, ammoName = "tfz", "TFZ"
+        elseif string.find(l, "armor", 1, true) or string.find(l, "piercing", 1, true) or l == "ap" or string.find(l, "ap-", 1, true) then
+            ammoType, ammoName = "ap", "AP"
         elseif string.find(l, "flechette", 1, true) then
-            ammoType = "flechette"
-            ammoName = "Flechette"
+            ammoType, ammoName = "flechette", "Flechette"
         elseif string.find(l, "slug", 1, true) then
-            ammoType = "slug"
-            ammoName = "Slug"
+            ammoType, ammoName = "slug", "Slug"
         elseif string.find(l, "buck", 1, true) then
-            ammoType = "buckshot"
-            ammoName = "Buckshot"
+            ammoType, ammoName = "buckshot", "Buckshot"
         elseif string.find(l, "ap-20", 1, true) or string.find(l, "ap20", 1, true) then
-            ammoType = "ap-20"
-            ammoName = "AP-20"
+            ammoType, ammoName = "ap-20", "AP-20"
         elseif string.find(l, "tracer", 1, true) then
-            ammoType = "tracer"
-            ammoName = "Tracer"
+            ammoType, ammoName = "tracer", "Tracer"
         end
     end
 
     if obj then
         local props = obj:FindFirstChild("ItemProperties")
         if props then
-            checkStr(props:GetAttribute("Ammo"))
-            checkStr(props:GetAttribute("AmmoType"))
-            checkStr(props:GetAttribute("Cartridge"))
-            checkStr(props:GetAttribute("Bullet"))
-            checkStr(props:GetAttribute("Round"))
-            checkStr(props:GetAttribute("Caliber"))
-            checkStr(props:GetAttribute("LoadedAmmo"))
-            checkStr(props:GetAttribute("CurrentAmmo"))
+            for _, key in ipairs({"Ammo", "AmmoType", "Cartridge", "Bullet", "Round", "Caliber", "LoadedAmmo", "CurrentAmmo"}) do
+                checkStr(props:GetAttribute(key))
+            end
         end
         checkStr(obj:GetAttribute("Ammo"))
         checkStr(obj:GetAttribute("AmmoType"))
-
         for _, desc in ipairs(obj:GetDescendants()) do
-            if desc:IsA("StringValue") or desc:IsA("StringAttribute") then
-                checkStr(desc.Value or desc.Name)
-            end
             local n = string.lower(desc.Name)
             if string.find(n, "ammo", 1, true) or string.find(n, "mag", 1, true) or string.find(n, "round", 1, true) then
                 checkStr(desc.Name)
@@ -253,68 +212,49 @@ local function DetectAmmoType(obj, caliberKey)
         end
     end
 
-    local table = AmmoVel[caliberKey]
+    local tbl = AmmoVel[caliberKey]
     local speed = BulletSpeed
-    if table then
-        speed = table[ammoType] or table.tracer or BulletSpeed
+    if tbl then
+        speed = tbl[ammoType] or tbl.tracer or BulletSpeed
     end
-
     return ammoName, speed
 end
 
 local function DetectLocalWeapon()
     local char = LocalPlayer.Character
     if not char then
-        CurrentWeapon = "None"
-        CurrentAmmo = "Default"
-        BulletSpeed = 2600
-        DropMult = 0.7
+        CurrentWeapon, CurrentAmmo, BulletSpeed, DropMult = "None", "Default", 2600, 0.7
         return
     end
 
     local function apply(name, spd, drop, cal, obj)
-        CurrentWeapon = name
-        DropMult = drop
+        CurrentWeapon, DropMult = name, drop
         local ammoName, ammoSpd = DetectAmmoType(obj, cal)
-        CurrentAmmo = ammoName
-        BulletSpeed = ammoSpd or spd
+        CurrentAmmo, BulletSpeed = ammoName, ammoSpd or spd
     end
 
     local tool = char:FindFirstChildOfClass("Tool")
     if tool then
-        local matched, spd, drop, cal = MatchWeapon(GetCallSign(tool) or tool.Name)
-        if matched then
-            apply(matched, spd, drop, cal, tool)
-            return
-        end
+        local m, s, d, c = MatchWeapon(GetCallSign(tool) or tool.Name)
+        if m then apply(m, s, d, c, tool) return end
     end
 
     for _, child in ipairs(char:GetChildren()) do
         if child:IsA("Model") or child:IsA("Tool") then
-            local n = string.lower(child.Name)
-            if string.find(n, "clothing", 1, true) then continue end
-            local matched, spd, drop, cal = MatchWeapon(GetCallSign(child))
-            if matched then
-                apply(matched, spd, drop, cal, child)
-                return
-            end
+            if string.find(string.lower(child.Name), "clothing", 1, true) then continue end
+            local m, s, d, c = MatchWeapon(GetCallSign(child))
+            if m then apply(m, s, d, c, child) return end
         end
     end
 
     for _, child in ipairs(Camera:GetChildren()) do
         if child:IsA("Model") then
-            local matched, spd, drop, cal = MatchWeapon(GetCallSign(child) or child.Name)
-            if matched then
-                apply(matched, spd, drop, cal, child)
-                return
-            end
+            local m, s, d, c = MatchWeapon(GetCallSign(child) or child.Name)
+            if m then apply(m, s, d, c, child) return end
             for _, sub in ipairs(child:GetChildren()) do
                 if sub:IsA("Model") then
-                    matched, spd, drop, cal = MatchWeapon(GetCallSign(sub) or sub.Name)
-                    if matched then
-                        apply(matched, spd, drop, cal, sub)
-                        return
-                    end
+                    m, s, d, c = MatchWeapon(GetCallSign(sub) or sub.Name)
+                    if m then apply(m, s, d, c, sub) return end
                 end
             end
         end
@@ -329,21 +269,15 @@ local function DetectLocalWeapon()
                 if other and other.Parent then
                     local model = other:FindFirstAncestorWhichIsA("Model")
                     if model and model ~= char then
-                        local matched, spd, drop, cal = MatchWeapon(GetCallSign(model) or model.Name)
-                        if matched then
-                            apply(matched, spd, drop, cal, model)
-                            return
-                        end
+                        local m, s, d, c = MatchWeapon(GetCallSign(model) or model.Name)
+                        if m then apply(m, s, d, c, model) return end
                     end
                 end
             end
         end
     end
 
-    CurrentWeapon = "Unknown"
-    CurrentAmmo = "Default"
-    BulletSpeed = 2600
-    DropMult = 0.7
+    CurrentWeapon, CurrentAmmo, BulletSpeed, DropMult = "Unknown", "Default", 2600, 0.7
 end
 
 local function SetFullbright(enabled)
@@ -388,101 +322,125 @@ end
 local function GetAimPart(character)
     if Settings.AimHead then
         return character:FindFirstChild("Head")
-    else
-        return character:FindFirstChild("UpperTorso")
-            or character:FindFirstChild("Torso")
-            or character:FindFirstChild("HumanoidRootPart")
     end
+    return character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+        or character:FindFirstChild("HumanoidRootPart")
 end
 
 local function GetVelocity(model)
     local hrp = model:FindFirstChild("HumanoidRootPart")
         or model:FindFirstChild("Torso")
         or model:FindFirstChild("UpperTorso")
-    if hrp then
-        return hrp.AssemblyLinearVelocity
-    end
+    if hrp then return hrp.AssemblyLinearVelocity end
     return Vector3.zero
 end
 
+local function GetMyVelocity()
+    local char = LocalPlayer.Character
+    if not char then return Vector3.zero end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if hrp then return hrp.AssemblyLinearVelocity end
+    return Vector3.zero
+end
+
+-- FULL auto prediction: distance, weapon, relative speed, height, long-range drop
 local function GetPredictedPosition(part, model)
     local camPos = Camera.CFrame.Position
     local pos = part.Position
-    local dist = (pos - camPos).Magnitude
-    local vel = GetVelocity(model)
+    local delta = pos - camPos
+    local dist = delta.Magnitude
+    if dist < 0.1 then return pos end
+
+    local heightDiff = pos.Y - camPos.Y
+
+    local targetVel = GetVelocity(model)
+    local myVel = GetMyVelocity()
+    local relVel = targetVel - myVel
 
     local speed = math.clamp(BulletSpeed, 400, 6000)
-    local t = dist / speed
+    local flightTime = dist / speed
 
-    local r = math.clamp((dist - 8) / 55, 0, 1)
+    -- Range blend: 0 at close, 1 at long (smoothstep)
+    local r = math.clamp((dist - 10) / 80, 0, 1)
     r = r * r * (3 - 2 * r)
 
-    local hVel = Vector3.new(vel.X, 0, vel.Z)
-    local vVel = vel.Y
+    -- Cap lead time so fast targets are not over-led
+    local maxLead = 0.12 + r * 0.20
+    local leadT = math.min(flightTime * r, maxLead)
 
-    local flat = Vector3.new(pos.X - camPos.X, 0, pos.Z - camPos.Z)
-    local lateralBoost = 1
-    if flat.Magnitude > 1 then
-        local dir = flat.Unit
-        local lateral = hVel - dir * hVel:Dot(dir)
-        lateralBoost = 1 + math.clamp(lateral.Magnitude / 20, 0, 0.55)
+    local hRel = Vector3.new(relVel.X, 0, relVel.Z)
+    local vRel = relVel.Y
+    local hSpeed = hRel.Magnitude
+
+    -- Fast target dampening: high lateral speed → less aggressive lead
+    local speedDamp = 1 / (1 + hSpeed / 28)
+
+    -- Only lead along motion that matters (full horizontal, soft vertical)
+    local lateralLead = hRel * (leadT * speedDamp * 0.75)
+    local verticalLead = vRel * (leadT * 0.15)
+
+    -- Height difference
+    local heightComp = 0
+    if math.abs(heightDiff) > 3 then
+        heightComp = heightDiff * 0.012 * r
     end
 
-    local lead = t * r * lateralBoost
+    -- Bullet drop ~ t², stronger far away and slow calibers
+    local drop = (flightTime * flightTime) * 48 * DropMult * r
 
-    local predicted = pos
-        + hVel * lead
-        + Vector3.new(0, vVel * lead * 0.25, 0)
+    -- Extra drop past 120 studs (bullets "not reaching")
+    if dist > 120 then
+        drop = drop + ((dist - 120) / 90) * DropMult * 1.2
+    end
+    if dist > 200 then
+        drop = drop + ((dist - 200) / 100) * DropMult
+    end
 
-    local drop = (t * t) * 55 * DropMult * r
-    drop = math.clamp(drop, 0, 4)
+    -- Uphill: more drop; downhill: slightly less
+    if heightDiff > 8 then
+        drop = drop + heightDiff * 0.02 * r
+    elseif heightDiff < -8 then
+        drop = drop * (1 - math.clamp((-heightDiff) / 100, 0, 0.3))
+    end
 
-    return predicted + Vector3.new(0, drop, 0)
+    drop = math.clamp(drop, 0, 6)
+
+    return pos + lateralLead + Vector3.new(0, verticalLead + heightComp + drop, 0)
 end
 
 local function IsPartInFOV(part, center, radius)
     if not part then return false, math.huge end
     local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
     if not onScreen or screenPos.Z < 0 then return false, math.huge end
-    local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
-    return dist <= radius, dist
+    local d = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+    return d <= radius, d
 end
 
 local function GetClosestTarget()
-    local closestPart = nil
-    local closestModel = nil
+    local closestPart, closestModel = nil, nil
     local closestDist = Settings.AimRadius
     local viewport = Camera.ViewportSize
     local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
 
     local function checkModel(model)
         if not model or not IsAlive(model) then return end
-
-        local anyInFOV = false
-        local bestPartDist = math.huge
-
+        local anyInFOV, best = false, math.huge
         for _, partName in ipairs(BodyParts) do
             local part = model:FindFirstChild(partName)
             if part and part:IsA("BasePart") then
-                local inFOV, dist = IsPartInFOV(part, center, Settings.AimRadius)
+                local inFOV, d = IsPartInFOV(part, center, Settings.AimRadius)
                 if inFOV then
                     anyInFOV = true
-                    if dist < bestPartDist then
-                        bestPartDist = dist
-                    end
+                    if d < best then best = d end
                 end
             end
         end
-
         if not anyInFOV then return end
-
         local aimPart = GetAimPart(model)
         if not aimPart then return end
-
-        if bestPartDist < closestDist then
-            closestDist = bestPartDist
-            closestPart = aimPart
-            closestModel = model
+        if best < closestDist then
+            closestDist, closestPart, closestModel = best, aimPart, model
         end
     end
 
@@ -527,10 +485,7 @@ end
 
 local function ForceHighlight(hl, fillColor)
     if not hl or not hl.Parent then return end
-    if hl.Parent == LocalPlayer.Character then
-        pcall(function() hl:Destroy() end)
-        return
-    end
+    if hl.Parent == LocalPlayer.Character then pcall(function() hl:Destroy() end) return end
     pcall(function()
         hl.Enabled = true
         hl.FillColor = fillColor
@@ -555,48 +510,25 @@ local function CreateBillboard(character)
     billboard.MaxDistance = math.huge
     billboard.Parent = head
 
-    local nameLabel = Instance.new("TextLabel")
-    nameLabel.Name = "NameLabel"
-    nameLabel.Size = UDim2.new(1, 0, 0, 18)
-    nameLabel.Position = UDim2.new(0, 0, 0, 0)
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    nameLabel.TextStrokeTransparency = 0.25
-    nameLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.TextSize = 10
-    nameLabel.Text = ""
-    nameLabel.Visible = false
-    nameLabel.Parent = billboard
-
-    local healthLabel = Instance.new("TextLabel")
-    healthLabel.Name = "HealthLabel"
-    healthLabel.Size = UDim2.new(1, 0, 0, 18)
-    healthLabel.Position = UDim2.new(0, 0, 0, 18)
-    healthLabel.BackgroundTransparency = 1
-    healthLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
-    healthLabel.TextStrokeTransparency = 0.25
-    healthLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    healthLabel.Font = Enum.Font.Gotham
-    healthLabel.TextSize = 10
-    healthLabel.Text = ""
-    healthLabel.Visible = false
-    healthLabel.Parent = billboard
-
-    local distLabel = Instance.new("TextLabel")
-    distLabel.Name = "DistanceLabel"
-    distLabel.Size = UDim2.new(1, 0, 0, 18)
-    distLabel.Position = UDim2.new(0, 0, 0, 36)
-    distLabel.BackgroundTransparency = 1
-    distLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    distLabel.TextStrokeTransparency = 0.25
-    distLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-    distLabel.Font = Enum.Font.Gotham
-    distLabel.TextSize = 10
-    distLabel.Text = ""
-    distLabel.Visible = false
-    distLabel.Parent = billboard
-
+    for i, info in ipairs({
+        {"NameLabel", 0, Color3.fromRGB(255, 255, 255), Enum.Font.GothamBold},
+        {"HealthLabel", 18, Color3.fromRGB(0, 255, 100), Enum.Font.Gotham},
+        {"DistanceLabel", 36, Color3.fromRGB(200, 200, 200), Enum.Font.Gotham},
+    }) do
+        local lab = Instance.new("TextLabel")
+        lab.Name = info[1]
+        lab.Size = UDim2.new(1, 0, 0, 18)
+        lab.Position = UDim2.new(0, 0, 0, info[2])
+        lab.BackgroundTransparency = 1
+        lab.TextColor3 = info[3]
+        lab.TextStrokeTransparency = 0.25
+        lab.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        lab.Font = info[4]
+        lab.TextSize = 10
+        lab.Text = ""
+        lab.Visible = false
+        lab.Parent = billboard
+    end
     return billboard
 end
 
@@ -704,13 +636,10 @@ local function ApplyPlayerESP(player)
     if player == LocalPlayer then return end
     local character = player.Character
     if not character or not character.Parent then return end
-
-    local needAny = Settings.PlayersESP or Settings.PlayersLookVector
-    if not needAny then
+    if not (Settings.PlayersESP or Settings.PlayersLookVector) then
         RemovePlayerESP(player)
         return
     end
-
     if not PlayerESP[player] then PlayerESP[player] = {} end
 
     if Settings.PlayersESP then
@@ -733,24 +662,18 @@ local function ApplyPlayerESP(player)
         end
         if bb then
             local nameLabel = bb:FindFirstChild("NameLabel")
-            local healthLabel = bb:FindFirstChild("HealthLabel")
-            local distLabel = bb:FindFirstChild("DistanceLabel")
             if nameLabel then
                 nameLabel.Text = player.Name
                 nameLabel.Visible = Settings.PlayersName
             end
+            local healthLabel = bb:FindFirstChild("HealthLabel")
             if healthLabel then healthLabel.Visible = Settings.PlayersHealth end
+            local distLabel = bb:FindFirstChild("DistanceLabel")
             if distLabel then distLabel.Visible = Settings.PlayersDistance end
         end
     else
-        if PlayerESP[player].Highlight then
-            pcall(function() PlayerESP[player].Highlight:Destroy() end)
-            PlayerESP[player].Highlight = nil
-        end
-        if PlayerESP[player].Billboard then
-            pcall(function() PlayerESP[player].Billboard:Destroy() end)
-            PlayerESP[player].Billboard = nil
-        end
+        if PlayerESP[player].Highlight then pcall(function() PlayerESP[player].Highlight:Destroy() end) PlayerESP[player].Highlight = nil end
+        if PlayerESP[player].Billboard then pcall(function() PlayerESP[player].Billboard:Destroy() end) PlayerESP[player].Billboard = nil end
     end
 
     if Settings.PlayersLookVector then
@@ -760,28 +683,19 @@ local function ApplyPlayerESP(player)
             PlayerESP[player].LookPart.Size = Vector3.new(0.035, 0.035, Settings.LookLength)
         end
     else
-        if PlayerESP[player].LookPart then
-            pcall(function() PlayerESP[player].LookPart:Destroy() end)
-            PlayerESP[player].LookPart = nil
-        end
+        if PlayerESP[player].LookPart then pcall(function() PlayerESP[player].LookPart:Destroy() end) PlayerESP[player].LookPart = nil end
     end
 end
 
 local function TryAddBot(model)
     if not Settings.BotsESP and not Settings.NPCHealth then return end
-    if not model:IsA("Model") then return end
-    if model == LocalPlayer.Character then return end
-    if not IsAlive(model) then return end
-    if Settings.BotsESP then
-        if not BotESP[model] or not BotESP[model].Parent then
-            local hl = CreateHighlight(model, BOT_COLOR)
-            if hl then BotESP[model] = hl end
-        end
+    if not model:IsA("Model") or model == LocalPlayer.Character or not IsAlive(model) then return end
+    if Settings.BotsESP and (not BotESP[model] or not BotESP[model].Parent) then
+        local hl = CreateHighlight(model, BOT_COLOR)
+        if hl then BotESP[model] = hl end
     end
-    if Settings.NPCHealth then
-        if not BotHealth[model] or not BotHealth[model].Parent then
-            BotHealth[model] = CreateNPCHealthBillboard(model)
-        end
+    if Settings.NPCHealth and (not BotHealth[model] or not BotHealth[model].Parent) then
+        BotHealth[model] = CreateNPCHealthBillboard(model)
     end
 end
 
@@ -911,8 +825,7 @@ local function MaintainExits()
 end
 
 local function TryAddTrap(obj)
-    if not Settings.TrapsESP then return end
-    if not IsTrap(obj) then return end
+    if not Settings.TrapsESP or not IsTrap(obj) then return end
     if not (obj:IsA("Model") or obj:IsA("BasePart")) then return end
     local target = obj
     if obj:IsA("Model") then
@@ -962,7 +875,6 @@ local function MaintainTraps()
 end
 
 CreateFOVCircle()
-
 local WeaponLabel = nil
 
 RunService.RenderStepped:Connect(function()
@@ -977,13 +889,10 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    if Settings.AutoAim then
-        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
-            local part, model = GetClosestTarget()
-            if part and model then
-                local aimPos = GetPredictedPosition(part, model)
-                Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, aimPos)
-            end
+    if Settings.AutoAim and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        local part, model = GetClosestTarget()
+        if part and model then
+            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, GetPredictedPosition(part, model))
         end
     end
 end)
@@ -1077,7 +986,6 @@ Main.BorderSizePixel = 0
 Main.Active = true
 Main.Draggable = true
 Main.Parent = ScreenGui
-
 Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 8)
 
 local Title = Instance.new("TextLabel")
@@ -1089,7 +997,6 @@ Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 16
 Title.Parent = Main
-
 Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 8)
 
 local function CreateToggle(name, flag, yPos)
@@ -1116,7 +1023,6 @@ local function CreateToggle(name, flag, yPos)
     button.Text = ""
     button.AutoButtonColor = false
     button.Parent = frame
-
     Instance.new("UICorner", button).CornerRadius = UDim.new(0, 11)
 
     local circle = Instance.new("Frame")
@@ -1125,7 +1031,6 @@ local function CreateToggle(name, flag, yPos)
     circle.BackgroundColor3 = Color3.fromRGB(180, 180, 180)
     circle.BorderSizePixel = 0
     circle.Parent = button
-
     Instance.new("UICorner", circle).CornerRadius = UDim.new(1, 0)
 
     local enabled = Settings[flag] == true
@@ -1146,7 +1051,6 @@ local function CreateToggle(name, flag, yPos)
         enabled = not enabled
         Settings[flag] = enabled
         UpdateVisual()
-
         if flag == "BotsESP" or flag == "NPCHealth" then
             if Settings.BotsESP or Settings.NPCHealth then StartBotTracking() else StopBotTracking() end
             if not Settings.BotsESP then ClearBots() end
@@ -1161,12 +1065,9 @@ local function CreateToggle(name, flag, yPos)
         elseif flag == "AutoAim" then
             UpdateFOVCircle()
         else
-            for _, plr in ipairs(Players:GetPlayers()) do
-                ApplyPlayerESP(plr)
-            end
+            for _, plr in ipairs(Players:GetPlayers()) do ApplyPlayerESP(plr) end
         end
     end)
-
     UpdateVisual()
 end
 
@@ -1219,7 +1120,6 @@ local function MakeField(labelText, default, y, onCommit)
     lab.TextSize = 12
     lab.TextXAlignment = Enum.TextXAlignment.Left
     lab.Parent = Main
-
     local box = Instance.new("TextBox")
     box.Size = UDim2.new(1, -20, 0, 24)
     box.Position = UDim2.new(0, 10, 0, y + 16)
