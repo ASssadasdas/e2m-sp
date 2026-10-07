@@ -28,6 +28,7 @@ local Settings = {
     ExitsESP = false,
     TrapsESP = false,
     Fullbright = false,
+    BulletTracers = false,
     AutoAim = false,
     AimNPCs = false,
     AimRadius = 100,
@@ -44,15 +45,19 @@ local OUTLINE_COLOR = Color3.fromRGB(255, 0, 0)
 local TEAM_COLOR = Color3.fromRGB(0, 255, 0)
 local EXIT_COLOR = Color3.fromRGB(0, 255, 0)
 local TRAP_COLOR = Color3.fromRGB(255, 50, 50)
+local TRACER_COLOR = Color3.fromRGB(255, 200, 50)
 
 local PlayerESP = {}
 local BotESP = {}
 local BotHealth = {}
 local ExitESP = {}
 local TrapESP = {}
+local CorpseESP = {}
 local BotConnections = {}
 local ExitConnections = {}
 local TrapConnection = nil
+local TracerConnection = nil
+local ActiveTracers = {}
 
 local FOVCircle = nil
 local hasDrawing = pcall(function() return Drawing end) and Drawing ~= nil
@@ -62,6 +67,9 @@ local CurrentAmmo = "Default"
 local BulletSpeed = 2600
 local DropMult = 0.7
 local LastWeaponScan = 0
+
+-- Game bullet speed is lower than real m/s×3.5 → scale for prediction
+local SPEED_SCALE = 0.38
 
 local OriginalLighting = {
     Brightness = Lighting.Brightness,
@@ -168,7 +176,6 @@ end
 
 local function DetectAmmoType(obj, caliberKey)
     local ammoType, ammoName = "tracer", "Tracer"
-
     local function checkStr(s)
         if not s then return end
         local l = string.lower(tostring(s))
@@ -188,7 +195,6 @@ local function DetectAmmoType(obj, caliberKey)
             ammoType, ammoName = "tracer", "Tracer"
         end
     end
-
     if obj then
         local props = obj:FindFirstChild("ItemProperties")
         if props then
@@ -211,12 +217,9 @@ local function DetectAmmoType(obj, caliberKey)
             end
         end
     end
-
     local tbl = AmmoVel[caliberKey]
     local speed = BulletSpeed
-    if tbl then
-        speed = tbl[ammoType] or tbl.tracer or BulletSpeed
-    end
+    if tbl then speed = tbl[ammoType] or tbl.tracer or BulletSpeed end
     return ammoName, speed
 end
 
@@ -226,19 +229,16 @@ local function DetectLocalWeapon()
         CurrentWeapon, CurrentAmmo, BulletSpeed, DropMult = "None", "Default", 2600, 0.7
         return
     end
-
     local function apply(name, spd, drop, cal, obj)
         CurrentWeapon, DropMult = name, drop
         local ammoName, ammoSpd = DetectAmmoType(obj, cal)
         CurrentAmmo, BulletSpeed = ammoName, ammoSpd or spd
     end
-
     local tool = char:FindFirstChildOfClass("Tool")
     if tool then
         local m, s, d, c = MatchWeapon(GetCallSign(tool) or tool.Name)
         if m then apply(m, s, d, c, tool) return end
     end
-
     for _, child in ipairs(char:GetChildren()) do
         if child:IsA("Model") or child:IsA("Tool") then
             if string.find(string.lower(child.Name), "clothing", 1, true) then continue end
@@ -246,7 +246,6 @@ local function DetectLocalWeapon()
             if m then apply(m, s, d, c, child) return end
         end
     end
-
     for _, child in ipairs(Camera:GetChildren()) do
         if child:IsA("Model") then
             local m, s, d, c = MatchWeapon(GetCallSign(child) or child.Name)
@@ -259,7 +258,6 @@ local function DetectLocalWeapon()
             end
         end
     end
-
     for _, handName in ipairs({"RightHand", "LeftHand", "Right Arm", "Left Arm"}) do
         local hand = char:FindFirstChild(handName)
         if not hand then continue end
@@ -276,7 +274,6 @@ local function DetectLocalWeapon()
             end
         end
     end
-
     CurrentWeapon, CurrentAmmo, BulletSpeed, DropMult = "Unknown", "Default", 2600, 0.7
 end
 
@@ -344,67 +341,59 @@ local function GetMyVelocity()
     return Vector3.zero
 end
 
--- FULL auto prediction: distance, weapon, relative speed, height, long-range drop
 local function GetPredictedPosition(part, model)
     local camPos = Camera.CFrame.Position
     local pos = part.Position
-    local delta = pos - camPos
-    local dist = delta.Magnitude
+    local dist = (pos - camPos).Magnitude
     if dist < 0.1 then return pos end
 
     local heightDiff = pos.Y - camPos.Y
-
     local targetVel = GetVelocity(model)
     local myVel = GetMyVelocity()
     local relVel = targetVel - myVel
 
-    local speed = math.clamp(BulletSpeed, 400, 6000)
+    -- Scale wiki speed down to match in-game ballistics
+    local speed = math.clamp(BulletSpeed * SPEED_SCALE, 200, 2500)
     local flightTime = dist / speed
 
-    -- Range blend: 0 at close, 1 at long (smoothstep)
-    local r = math.clamp((dist - 10) / 80, 0, 1)
+    local r = math.clamp((dist - 8) / 90, 0, 1)
     r = r * r * (3 - 2 * r)
 
-    -- Cap lead time so fast targets are not over-led
-    local maxLead = 0.12 + r * 0.20
+    local maxLead = 0.10 + r * 0.22
     local leadT = math.min(flightTime * r, maxLead)
 
     local hRel = Vector3.new(relVel.X, 0, relVel.Z)
     local vRel = relVel.Y
-    local hSpeed = hRel.Magnitude
+    local speedDamp = 1 / (1 + hRel.Magnitude / 28)
 
-    -- Fast target dampening: high lateral speed → less aggressive lead
-    local speedDamp = 1 / (1 + hSpeed / 28)
+    local lateralLead = hRel * (leadT * speedDamp * 0.72)
+    local verticalLead = vRel * (leadT * 0.12)
 
-    -- Only lead along motion that matters (full horizontal, soft vertical)
-    local lateralLead = hRel * (leadT * speedDamp * 0.75)
-    local verticalLead = vRel * (leadT * 0.15)
-
-    -- Height difference
     local heightComp = 0
     if math.abs(heightDiff) > 3 then
-        heightComp = heightDiff * 0.012 * r
+        heightComp = heightDiff * 0.015 * r
     end
 
-    -- Bullet drop ~ t², stronger far away and slow calibers
-    local drop = (flightTime * flightTime) * 48 * DropMult * r
+    -- Stronger drop so bullets reach at long range (aim higher)
+    local drop = (flightTime * flightTime) * 95 * DropMult * r
 
-    -- Extra drop past 120 studs (bullets "not reaching")
-    if dist > 120 then
-        drop = drop + ((dist - 120) / 90) * DropMult * 1.2
+    if dist > 80 then
+        drop = drop + (dist - 80) * 0.028 * DropMult
     end
-    if dist > 200 then
-        drop = drop + ((dist - 200) / 100) * DropMult
+    if dist > 150 then
+        drop = drop + (dist - 150) * 0.04 * DropMult
+    end
+    if dist > 250 then
+        drop = drop + (dist - 250) * 0.05 * DropMult
     end
 
-    -- Uphill: more drop; downhill: slightly less
     if heightDiff > 8 then
-        drop = drop + heightDiff * 0.02 * r
+        drop = drop + heightDiff * 0.025 * r
     elseif heightDiff < -8 then
         drop = drop * (1 - math.clamp((-heightDiff) / 100, 0, 0.3))
     end
 
-    drop = math.clamp(drop, 0, 6)
+    drop = math.clamp(drop, 0, 12)
 
     return pos + lateralLead + Vector3.new(0, verticalLead + heightComp + drop, 0)
 end
@@ -509,8 +498,7 @@ local function CreateBillboard(character)
     billboard.AlwaysOnTop = true
     billboard.MaxDistance = math.huge
     billboard.Parent = head
-
-    for i, info in ipairs({
+    for _, info in ipairs({
         {"NameLabel", 0, Color3.fromRGB(255, 255, 255), Enum.Font.GothamBold},
         {"HealthLabel", 18, Color3.fromRGB(0, 255, 100), Enum.Font.Gotham},
         {"DistanceLabel", 36, Color3.fromRGB(200, 200, 200), Enum.Font.Gotham},
@@ -676,7 +664,7 @@ local function ApplyPlayerESP(player)
         if PlayerESP[player].Billboard then pcall(function() PlayerESP[player].Billboard:Destroy() end) PlayerESP[player].Billboard = nil end
     end
 
-    if Settings.PlayersLookVector then
+    if Settings.PlayersLookVector and IsAlive(character) then
         if not PlayerESP[player].LookPart or not PlayerESP[player].LookPart.Parent then
             PlayerESP[player].LookPart = CreateLookPart()
         else
@@ -684,6 +672,55 @@ local function ApplyPlayerESP(player)
         end
     else
         if PlayerESP[player].LookPart then pcall(function() PlayerESP[player].LookPart:Destroy() end) PlayerESP[player].LookPart = nil end
+    end
+end
+
+-- Corpses (dead models not tied to living players)
+local function TryAddCorpse(model)
+    if not Settings.PlayersESP then return end
+    if not model or not model:IsA("Model") then return end
+    if model == LocalPlayer.Character then return end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health > 0 then return end
+    -- skip if this is a living player's character (handled by PlayerESP)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character == model and IsAlive(model) then return end
+    end
+    if not CorpseESP[model] or not CorpseESP[model].Parent then
+        local hl = CreateHighlight(model, DEAD_COLOR)
+        if hl then CorpseESP[model] = hl end
+    else
+        ForceHighlight(CorpseESP[model], DEAD_COLOR)
+    end
+end
+
+local function MaintainCorpses()
+    if not Settings.PlayersESP then
+        for m, hl in pairs(CorpseESP) do pcall(function() hl:Destroy() end) end
+        table.clear(CorpseESP)
+        return
+    end
+    for model, hl in pairs(CorpseESP) do
+        if not model or not model.Parent then
+            pcall(function() hl:Destroy() end)
+            CorpseESP[model] = nil
+        else
+            ForceHighlight(hl, DEAD_COLOR)
+        end
+    end
+    -- scan common corpse locations + dead player characters
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and not IsAlive(plr.Character) then
+            TryAddCorpse(plr.Character)
+        end
+    end
+    for _, name in ipairs({"Corpses", "DeadBodies", "Bodies", "Ragdolls", "Debris"}) do
+        local folder = Workspace:FindFirstChild(name)
+        if folder then
+            for _, m in ipairs(folder:GetChildren()) do
+                if m:IsA("Model") then TryAddCorpse(m) end
+            end
+        end
     end
 end
 
@@ -874,12 +911,91 @@ local function MaintainTraps()
     end
 end
 
+-- Bullet Tracers
+local BulletNameHints = {"bullet", "projectile", "tracer", "round", "pellet", "slug", "shell", "ammo"}
+
+local function IsBulletObject(obj)
+    if not obj then return false end
+    if obj:IsA("BasePart") then
+        local n = string.lower(obj.Name)
+        for _, h in ipairs(BulletNameHints) do
+            if string.find(n, h, 1, true) then return true end
+        end
+        -- small fast part
+        if obj.Size.Magnitude < 4 then
+            local sp = obj.AssemblyLinearVelocity.Magnitude
+            if sp > 80 then return true end
+        end
+    elseif obj:IsA("Model") then
+        local n = string.lower(obj.Name)
+        for _, h in ipairs(BulletNameHints) do
+            if string.find(n, h, 1, true) then return true end
+        end
+    elseif obj:IsA("Beam") or obj:IsA("Trail") then
+        local n = string.lower(obj.Name)
+        for _, h in ipairs(BulletNameHints) do
+            if string.find(n, h, 1, true) then return true end
+        end
+    end
+    return false
+end
+
+local function AttachTracer(obj)
+    if not Settings.BulletTracers then return end
+    if ActiveTracers[obj] then return end
+
+    local target = obj
+    if obj:IsA("Model") then
+        target = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+        if not target then return end
+    end
+    if not target:IsA("BasePart") and not target:IsA("Beam") and not target:IsA("Trail") then
+        return
+    end
+
+    local hl = Instance.new("Highlight")
+    hl.Name = "XenoBulletTracer"
+    hl.Adornee = obj:IsA("Model") and obj or target
+    hl.FillColor = TRACER_COLOR
+    hl.OutlineColor = Color3.fromRGB(255, 255, 100)
+    hl.FillTransparency = 0.35
+    hl.OutlineTransparency = 0.2
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = obj:IsA("Model") and obj or target
+
+    ActiveTracers[obj] = hl
+
+    task.delay(3, function()
+        pcall(function() if hl then hl:Destroy() end end)
+        ActiveTracers[obj] = nil
+    end)
+end
+
+local function StartTracers()
+    if TracerConnection then TracerConnection:Disconnect() end
+    TracerConnection = Workspace.DescendantAdded:Connect(function(obj)
+        if not Settings.BulletTracers then return end
+        task.defer(function()
+            if IsBulletObject(obj) then
+                AttachTracer(obj)
+            end
+        end)
+    end)
+end
+
+local function StopTracers()
+    if TracerConnection then TracerConnection:Disconnect() TracerConnection = nil end
+    for obj, hl in pairs(ActiveTracers) do
+        pcall(function() hl:Destroy() end)
+    end
+    table.clear(ActiveTracers)
+end
+
 CreateFOVCircle()
 local WeaponLabel = nil
 
 RunService.RenderStepped:Connect(function()
     UpdateFOVCircle()
-
     local now = tick()
     if now - LastWeaponScan > 0.3 then
         LastWeaponScan = now
@@ -888,7 +1004,6 @@ RunService.RenderStepped:Connect(function()
             WeaponLabel.Text = string.format("%s | %s | %d", CurrentWeapon, CurrentAmmo, math.floor(BulletSpeed))
         end
     end
-
     if Settings.AutoAim and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
         local part, model = GetClosestTarget()
         if part and model then
@@ -930,7 +1045,7 @@ RunService.Heartbeat:Connect(function()
                         distLabel.Visible = true
                     end
                 end
-                if Settings.PlayersLookVector and PlayerESP[player] and PlayerESP[player].LookPart then
+                if Settings.PlayersLookVector and PlayerESP[player] and PlayerESP[player].LookPart and IsAlive(character) then
                     local head = character:FindFirstChild("Head")
                     local lookPart = PlayerESP[player].LookPart
                     if head and lookPart then
@@ -946,6 +1061,7 @@ RunService.Heartbeat:Connect(function()
     MaintainBots()
     MaintainExits()
     MaintainTraps()
+    MaintainCorpses()
 end)
 
 local function SetupPlayer(player)
@@ -956,8 +1072,9 @@ local function SetupPlayer(player)
             local hum = character:WaitForChild("Humanoid", 8)
             if not hum then return end
             hum.Died:Connect(function()
-                task.wait(0.15)
+                task.wait(0.2)
                 ApplyPlayerESP(player)
+                TryAddCorpse(character)
             end)
             task.wait(0.7)
             if player.Character == character then ApplyPlayerESP(player) end
@@ -979,8 +1096,8 @@ ScreenGui.Parent = CoreGui
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.new(0, 270, 0, 870)
-Main.Position = UDim2.new(0.5, -135, 0.5, -435)
+Main.Size = UDim2.new(0, 270, 0, 920)
+Main.Position = UDim2.new(0.5, -135, 0.5, -460)
 Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -1062,6 +1179,8 @@ local function CreateToggle(name, flag, yPos)
             if enabled then StartTrapTracking() else StopTrapTracking() end
         elseif flag == "Fullbright" then
             SetFullbright(enabled)
+        elseif flag == "BulletTracers" then
+            if enabled then StartTracers() else StopTracers() end
         elseif flag == "AutoAim" then
             UpdateFOVCircle()
         else
@@ -1081,10 +1200,11 @@ CreateToggle("NPC Health", "NPCHealth", 320)
 CreateToggle("Exits ESP", "ExitsESP", 365)
 CreateToggle("Traps ESP", "TrapsESP", 410)
 CreateToggle("Fullbright", "Fullbright", 455)
+CreateToggle("Bullet Tracers", "BulletTracers", 500)
 
 local AimSep = Instance.new("TextLabel")
 AimSep.Size = UDim2.new(1, -20, 0, 20)
-AimSep.Position = UDim2.new(0, 10, 0, 495)
+AimSep.Position = UDim2.new(0, 10, 0, 540)
 AimSep.BackgroundTransparency = 1
 AimSep.Text = "— Aim —"
 AimSep.TextColor3 = Color3.fromRGB(150, 150, 160)
@@ -1092,13 +1212,13 @@ AimSep.Font = Enum.Font.GothamBold
 AimSep.TextSize = 13
 AimSep.Parent = Main
 
-CreateToggle("Auto Aim", "AutoAim", 515)
-CreateToggle("Aim NPCs", "AimNPCs", 560)
-CreateToggle("Aim at Head", "AimHead", 605)
+CreateToggle("Auto Aim", "AutoAim", 560)
+CreateToggle("Aim NPCs", "AimNPCs", 605)
+CreateToggle("Aim at Head", "AimHead", 650)
 
 WeaponLabel = Instance.new("TextLabel")
 WeaponLabel.Size = UDim2.new(1, -20, 0, 40)
-WeaponLabel.Position = UDim2.new(0, 10, 0, 650)
+WeaponLabel.Position = UDim2.new(0, 10, 0, 695)
 WeaponLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
 WeaponLabel.BorderSizePixel = 0
 WeaponLabel.Text = "None | Default | 2600"
@@ -1138,17 +1258,17 @@ local function MakeField(labelText, default, y, onCommit)
     return box
 end
 
-MakeField("Aim Radius (min 5):", "100", 700, function(box)
+MakeField("Aim Radius (min 5):", "100", 745, function(box)
     local n = tonumber(box.Text)
     if n and n >= 5 then Settings.AimRadius = n UpdateFOVCircle() else box.Text = tostring(Settings.AimRadius) end
 end)
 
-MakeField("Teammate Name:", "", 750, function(box)
+MakeField("Teammate Name:", "", 795, function(box)
     Settings.TeammateName = box.Text
     for _, plr in ipairs(Players:GetPlayers()) do ApplyPlayerESP(plr) end
 end)
 
-MakeField("Look Length (studs):", "5", 800, function(box)
+MakeField("Look Length (studs):", "5", 845, function(box)
     local n = tonumber(box.Text)
     if n and n > 0 then Settings.LookLength = n UpdateLookPartsSize() else box.Text = tostring(Settings.LookLength) end
 end)
@@ -1165,6 +1285,7 @@ CloseBtn.Parent = Main
 Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 6)
 CloseBtn.MouseButton1Click:Connect(function()
     if FOVCircle then pcall(function() FOVCircle:Remove() end) end
+    StopTracers()
     ScreenGui:Destroy()
 end)
 
