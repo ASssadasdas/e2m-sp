@@ -32,10 +32,6 @@ local Settings = {
     AimNPCs = false,
     AimRadius = 100,
     AimHead = true,
-    AimYOffset = 0,
-    Prediction = 0.15,
-    AutoPredict = true,
-    BulletSpeed = 900,
     TeammateName = "",
     LookLength = 5,
 }
@@ -61,6 +57,12 @@ local TrapConnection = nil
 local FOVCircle = nil
 local hasDrawing = pcall(function() return Drawing end) and Drawing ~= nil
 
+local CurrentWeapon = "None"
+local CurrentAmmo = "Default"
+local BulletSpeed = 2600
+local DropMult = 0.7
+local LastWeaponScan = 0
+
 local OriginalLighting = {
     Brightness = Lighting.Brightness,
     ClockTime = Lighting.ClockTime,
@@ -83,6 +85,67 @@ local BodyParts = {
     "Left Arm", "Right Arm", "Left Leg", "Right Leg",
 }
 
+-- Wiki m/s × 3.5 ≈ studs/s | {pattern, defaultSpeed, dropMult, caliberKey}
+local WeaponDB = {
+    {"mod-98",          3500, 0.45, "338"},
+    {"task force zero", 3500, 0.45, "338"},
+    {"r700",            3470, 0.45, "338"},
+    {"remington",       3470, 0.45, "338"},
+    {"svd",             3100, 0.55, "76254"},
+    {"mosin",           3100, 0.55, "76254"},
+    {"pkm",             3100, 0.55, "76254"},
+    {"fn-fal",          3000, 0.60, "76251"},
+    {"fal",             3000, 0.60, "76251"},
+    {"m4a1",            3400, 0.50, "556"},
+    {"m4",              3400, 0.50, "556"},
+    {"adar",            3400, 0.50, "556"},
+    {"akmn",            2600, 0.70, "76239"},
+    {"akm",             2550, 0.72, "76239"},
+    {"sks",             2600, 0.70, "76239"},
+    {"as val",          1500, 1.15, "939"},
+    {"val",             1500, 1.15, "939"},
+    {"groza",           1500, 1.15, "939"},
+    {"ots-14",          1500, 1.15, "939"},
+    {"mp5",             1700, 1.05, "919"},
+    {"mp443",           1700, 1.05, "919"},
+    {"yarygin",         1700, 1.05, "919"},
+    {"mk23",            1750, 1.05, "45"},
+    {"ppsh",            1650, 1.08, "76225"},
+    {"tt-33",           1650, 1.08, "76225"},
+    {"tokarev",         1650, 1.08, "76225"},
+    {"nagant",          1650, 1.08, "76225"},
+    {"makarov",         1350, 1.25, "918"},
+    {"skorpion",        1400, 1.20, "918"},
+    {"mod-0",           1400, 1.20, "918"},
+    {"saiga",           1500, 1.30, "12ga"},
+    {"izh-81",          1450, 1.35, "12ga"},
+    {"izh-12",          1450, 1.35, "12ga"},
+    {"izh",             1450, 1.35, "12ga"},
+    {"toz",             1450, 1.35, "12ga"},
+    {"rpg",              700, 2.00, "rpg"},
+    {"knife",           9999, 0.00, "melee"},
+    {"karambit",        9999, 0.00, "melee"},
+    {"machete",         9999, 0.00, "melee"},
+    {"dv-2",            9999, 0.00, "melee"},
+}
+
+-- Wiki ammo velocities (m/s × 3.5) by caliber + type
+local AmmoVel = {
+    ["338"] = {tracer = 3470, ap = 3550, tfz = 3550},
+    ["76254"] = {tracer = 3100, ap = 3290, tfz = 3290},
+    ["76251"] = {tracer = 2870, ap = 3150, tfz = 3150},
+    ["556"] = {tracer = 3265, ap = 3500, tfz = 3500},
+    ["76239"] = {tracer = 2500, ap = 2685, tfz = 2685},
+    ["939"] = {tracer = 1485, ap = 1485, tfz = 1575},
+    ["919"] = {tracer = 1630, ap = 1750, tfz = 1750},
+    ["45"] = {tracer = 1630, ap = 1800, tfz = 1800},
+    ["76225"] = {tracer = 1610, ap = 1695, tfz = 1695},
+    ["918"] = {tracer = 1255, ap = 1340, tfz = 1415},
+    ["12ga"] = {tracer = 1490, ap = 1490, buckshot = 1490, slug = 1420, flechette = 1190, ["ap-20"] = 2190},
+    ["rpg"] = {tracer = 700, ap = 700, tfz = 700},
+    ["melee"] = {tracer = 9999, ap = 9999, tfz = 9999},
+}
+
 local function IsAlive(model)
     if not model then return false end
     local hum = model:FindFirstChildOfClass("Humanoid")
@@ -102,6 +165,185 @@ local function IsTrap(obj)
         if string.find(name, kw, 1, true) then return true end
     end
     return false
+end
+
+local function GetCallSign(obj)
+    if not obj then return nil end
+    local props = obj:FindFirstChild("ItemProperties")
+    if props then
+        local cs = props:GetAttribute("CallSign") or props:GetAttribute("Name")
+        if cs and tostring(cs) ~= "" then return tostring(cs) end
+    end
+    local a = obj:GetAttribute("CallSign")
+    if a then return tostring(a) end
+    return obj.Name
+end
+
+local function MatchWeapon(name)
+    if not name then return nil end
+    local lower = string.lower(name)
+    for _, entry in ipairs(WeaponDB) do
+        if string.find(lower, entry[1], 1, true) then
+            return name, entry[2], entry[3], entry[4]
+        end
+    end
+    return nil
+end
+
+local function DetectAmmoType(obj, caliberKey)
+    local ammoType = "tracer"
+    local ammoName = "Tracer"
+
+    local function checkStr(s)
+        if not s then return end
+        local l = string.lower(tostring(s))
+        if string.find(l, "tfz", 1, true) or string.find(l, "cqb", 1, true) then
+            ammoType = "tfz"
+            ammoName = "TFZ"
+        elseif string.find(l, "armor", 1, true) or string.find(l, "ap", 1, true) or string.find(l, "piercing", 1, true) then
+            ammoType = "ap"
+            ammoName = "AP"
+        elseif string.find(l, "flechette", 1, true) then
+            ammoType = "flechette"
+            ammoName = "Flechette"
+        elseif string.find(l, "slug", 1, true) then
+            ammoType = "slug"
+            ammoName = "Slug"
+        elseif string.find(l, "buck", 1, true) then
+            ammoType = "buckshot"
+            ammoName = "Buckshot"
+        elseif string.find(l, "ap-20", 1, true) or string.find(l, "ap20", 1, true) then
+            ammoType = "ap-20"
+            ammoName = "AP-20"
+        elseif string.find(l, "tracer", 1, true) then
+            ammoType = "tracer"
+            ammoName = "Tracer"
+        end
+    end
+
+    if obj then
+        local props = obj:FindFirstChild("ItemProperties")
+        if props then
+            checkStr(props:GetAttribute("Ammo"))
+            checkStr(props:GetAttribute("AmmoType"))
+            checkStr(props:GetAttribute("Cartridge"))
+            checkStr(props:GetAttribute("Bullet"))
+            checkStr(props:GetAttribute("Round"))
+            checkStr(props:GetAttribute("Caliber"))
+            checkStr(props:GetAttribute("LoadedAmmo"))
+            checkStr(props:GetAttribute("CurrentAmmo"))
+        end
+        checkStr(obj:GetAttribute("Ammo"))
+        checkStr(obj:GetAttribute("AmmoType"))
+
+        for _, desc in ipairs(obj:GetDescendants()) do
+            if desc:IsA("StringValue") or desc:IsA("StringAttribute") then
+                checkStr(desc.Value or desc.Name)
+            end
+            local n = string.lower(desc.Name)
+            if string.find(n, "ammo", 1, true) or string.find(n, "mag", 1, true) or string.find(n, "round", 1, true) then
+                checkStr(desc.Name)
+                if desc:IsA("StringValue") then checkStr(desc.Value) end
+                local p = desc:FindFirstChild("ItemProperties")
+                if p then
+                    checkStr(p:GetAttribute("CallSign"))
+                    checkStr(p:GetAttribute("Name"))
+                end
+            end
+        end
+    end
+
+    local table = AmmoVel[caliberKey]
+    local speed = BulletSpeed
+    if table then
+        speed = table[ammoType] or table.tracer or BulletSpeed
+    end
+
+    return ammoName, speed
+end
+
+local function DetectLocalWeapon()
+    local char = LocalPlayer.Character
+    if not char then
+        CurrentWeapon = "None"
+        CurrentAmmo = "Default"
+        BulletSpeed = 2600
+        DropMult = 0.7
+        return
+    end
+
+    local function apply(name, spd, drop, cal, obj)
+        CurrentWeapon = name
+        DropMult = drop
+        local ammoName, ammoSpd = DetectAmmoType(obj, cal)
+        CurrentAmmo = ammoName
+        BulletSpeed = ammoSpd or spd
+    end
+
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool then
+        local matched, spd, drop, cal = MatchWeapon(GetCallSign(tool) or tool.Name)
+        if matched then
+            apply(matched, spd, drop, cal, tool)
+            return
+        end
+    end
+
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Model") or child:IsA("Tool") then
+            local n = string.lower(child.Name)
+            if string.find(n, "clothing", 1, true) then continue end
+            local matched, spd, drop, cal = MatchWeapon(GetCallSign(child))
+            if matched then
+                apply(matched, spd, drop, cal, child)
+                return
+            end
+        end
+    end
+
+    for _, child in ipairs(Camera:GetChildren()) do
+        if child:IsA("Model") then
+            local matched, spd, drop, cal = MatchWeapon(GetCallSign(child) or child.Name)
+            if matched then
+                apply(matched, spd, drop, cal, child)
+                return
+            end
+            for _, sub in ipairs(child:GetChildren()) do
+                if sub:IsA("Model") then
+                    matched, spd, drop, cal = MatchWeapon(GetCallSign(sub) or sub.Name)
+                    if matched then
+                        apply(matched, spd, drop, cal, sub)
+                        return
+                    end
+                end
+            end
+        end
+    end
+
+    for _, handName in ipairs({"RightHand", "LeftHand", "Right Arm", "Left Arm"}) do
+        local hand = char:FindFirstChild(handName)
+        if not hand then continue end
+        for _, joint in ipairs(hand:GetChildren()) do
+            if joint:IsA("Motor6D") or joint:IsA("Weld") then
+                local other = (joint.Part0 == hand) and joint.Part1 or joint.Part0
+                if other and other.Parent then
+                    local model = other:FindFirstAncestorWhichIsA("Model")
+                    if model and model ~= char then
+                        local matched, spd, drop, cal = MatchWeapon(GetCallSign(model) or model.Name)
+                        if matched then
+                            apply(matched, spd, drop, cal, model)
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    CurrentWeapon = "Unknown"
+    CurrentAmmo = "Default"
+    BulletSpeed = 2600
+    DropMult = 0.7
 end
 
 local function SetFullbright(enabled)
@@ -165,29 +407,37 @@ end
 
 local function GetPredictedPosition(part, model)
     local camPos = Camera.CFrame.Position
-    local targetPos = part.Position
-    local dist = (targetPos - camPos).Magnitude
-    local velocity = GetVelocity(model)
+    local pos = part.Position
+    local dist = (pos - camPos).Magnitude
+    local vel = GetVelocity(model)
 
-    local lead
-    if Settings.AutoPredict then
-        local speed = math.max(Settings.BulletSpeed, 100)
-        local timeToHit = dist / speed
-        local speedFactor = math.clamp(velocity.Magnitude / 20, 0, 1)
-        lead = timeToHit * (0.85 + speedFactor * 0.35)
-        lead = math.clamp(lead, 0.02, 0.55)
-    else
-        lead = Settings.Prediction
+    local speed = math.clamp(BulletSpeed, 400, 6000)
+    local t = dist / speed
+
+    local r = math.clamp((dist - 8) / 55, 0, 1)
+    r = r * r * (3 - 2 * r)
+
+    local hVel = Vector3.new(vel.X, 0, vel.Z)
+    local vVel = vel.Y
+
+    local flat = Vector3.new(pos.X - camPos.X, 0, pos.Z - camPos.Z)
+    local lateralBoost = 1
+    if flat.Magnitude > 1 then
+        local dir = flat.Unit
+        local lateral = hVel - dir * hVel:Dot(dir)
+        lateralBoost = 1 + math.clamp(lateral.Magnitude / 20, 0, 0.55)
     end
 
-    local yDrop
-    if Settings.AimYOffset ~= 0 then
-        yDrop = Settings.AimYOffset
-    else
-        yDrop = math.clamp(dist / 350, 0, 2.5)
-    end
+    local lead = t * r * lateralBoost
 
-    return targetPos + velocity * lead + Vector3.new(0, yDrop, 0)
+    local predicted = pos
+        + hVel * lead
+        + Vector3.new(0, vVel * lead * 0.25, 0)
+
+    local drop = (t * t) * 55 * DropMult * r
+    drop = math.clamp(drop, 0, 4)
+
+    return predicted + Vector3.new(0, drop, 0)
 end
 
 local function IsPartInFOV(part, center, radius)
@@ -713,8 +963,19 @@ end
 
 CreateFOVCircle()
 
+local WeaponLabel = nil
+
 RunService.RenderStepped:Connect(function()
     UpdateFOVCircle()
+
+    local now = tick()
+    if now - LastWeaponScan > 0.3 then
+        LastWeaponScan = now
+        DetectLocalWeapon()
+        if WeaponLabel then
+            WeaponLabel.Text = string.format("%s | %s | %d", CurrentWeapon, CurrentAmmo, math.floor(BulletSpeed))
+        end
+    end
 
     if Settings.AutoAim then
         if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
@@ -809,8 +1070,8 @@ ScreenGui.Parent = CoreGui
 
 local Main = Instance.new("Frame")
 Main.Name = "Main"
-Main.Size = UDim2.new(0, 260, 0, 980)
-Main.Position = UDim2.new(0.5, -130, 0.5, -490)
+Main.Size = UDim2.new(0, 270, 0, 870)
+Main.Position = UDim2.new(0.5, -135, 0.5, -435)
 Main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -933,7 +1194,19 @@ AimSep.Parent = Main
 CreateToggle("Auto Aim", "AutoAim", 515)
 CreateToggle("Aim NPCs", "AimNPCs", 560)
 CreateToggle("Aim at Head", "AimHead", 605)
-CreateToggle("Auto Predict", "AutoPredict", 650)
+
+WeaponLabel = Instance.new("TextLabel")
+WeaponLabel.Size = UDim2.new(1, -20, 0, 40)
+WeaponLabel.Position = UDim2.new(0, 10, 0, 650)
+WeaponLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+WeaponLabel.BorderSizePixel = 0
+WeaponLabel.Text = "None | Default | 2600"
+WeaponLabel.TextColor3 = Color3.fromRGB(0, 220, 140)
+WeaponLabel.Font = Enum.Font.GothamBold
+WeaponLabel.TextSize = 11
+WeaponLabel.TextWrapped = true
+WeaponLabel.Parent = Main
+Instance.new("UICorner", WeaponLabel).CornerRadius = UDim.new(0, 6)
 
 local function MakeField(labelText, default, y, onCommit)
     local lab = Instance.new("TextLabel")
@@ -965,32 +1238,17 @@ local function MakeField(labelText, default, y, onCommit)
     return box
 end
 
-MakeField("Aim Radius (min 5):", "100", 695, function(box)
+MakeField("Aim Radius (min 5):", "100", 700, function(box)
     local n = tonumber(box.Text)
     if n and n >= 5 then Settings.AimRadius = n UpdateFOVCircle() else box.Text = tostring(Settings.AimRadius) end
 end)
 
-MakeField("Y Offset (0 = auto drop):", "0", 745, function(box)
-    local n = tonumber(box.Text)
-    if n then Settings.AimYOffset = n else box.Text = tostring(Settings.AimYOffset) end
-end)
-
-MakeField("Prediction (if Auto off):", "0.15", 795, function(box)
-    local n = tonumber(box.Text)
-    if n and n >= 0 then Settings.Prediction = n else box.Text = tostring(Settings.Prediction) end
-end)
-
-MakeField("Bullet Speed (auto pred):", "900", 845, function(box)
-    local n = tonumber(box.Text)
-    if n and n >= 100 then Settings.BulletSpeed = n else box.Text = tostring(Settings.BulletSpeed) end
-end)
-
-MakeField("Teammate Name:", "", 895, function(box)
+MakeField("Teammate Name:", "", 750, function(box)
     Settings.TeammateName = box.Text
     for _, plr in ipairs(Players:GetPlayers()) do ApplyPlayerESP(plr) end
 end)
 
-MakeField("Look Length (studs):", "5", 945, function(box)
+MakeField("Look Length (studs):", "5", 800, function(box)
     local n = tonumber(box.Text)
     if n and n > 0 then Settings.LookLength = n UpdateLookPartsSize() else box.Text = tostring(Settings.LookLength) end
 end)
